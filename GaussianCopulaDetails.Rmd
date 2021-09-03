@@ -1,0 +1,148 @@
+
+
+# Online Supplement 2:  Multivariate Gaussian Copula Details 
+
+Although properties of the multivariate Gaussian copula has been developed extensively, it is worthwhile to collect facts needed for this paper in this supplement. [Section 2.1](S:Appendix1) is largely drawn from @joe2014dependence. [Section 2.2](S:Appendix2) contains new results on derivatives with respect to association parameters.
+
+Consider a $d$ dimensional multivariate normal distribution with variance-covariance matrix $\boldsymbol \Sigma$. As we will use this as a basis for defining copulas, consider the mean to be zero and variance to be 1 so that the diagonal elements of $\boldsymbol \Sigma$ equal 1. Let $\Phi_d( \cdot; \boldsymbol \Sigma)$ be the corresponding distribution function. With this, the Gaussian copula can be expressed as
+$$C\left(u_1, \ldots, u_d\right) = \Phi_d\left(z_1, \ldots, z_d; \boldsymbol \Sigma \right) .$$
+In this expression, we use the normal scores defined as $z_j = \Phi^{-1}(u_j), j=1, \ldots, d.$
+
+
+## Copula Distribution Function Derivatives {#S:Appendix1}
+
+We wish to calculate partial derivatives of the copula distribution function. For elliptical copulas, it is natural to relate them to conditional copulas using
+
+$\partial_{u_{d-k+1} \cdots  u_{d}} C(u_1, \ldots u_d) = \frac{\partial^k}
+{\partial u_{d-k+1} \cdots \partial u_{d}} C(u_1, \ldots u_d)$
+
+\begin{eqnarray}\label{E:PartialCop}
+ \ \ \ &=&
+\int^{u_1}  \cdots \int^{u_{d-k}} c\left(z_1, \ldots, z_{d-k}, u_{d-k+1}, \dots, u_d\right) dz_1 \cdots dz_{d-k} \nonumber \\
+&=&
+\int^{u_1}  \cdots \int^{u_{d-k}} c\left(z_1, \ldots, z_{d-k} | u_{d-k+1}, \dots, u_d\right)
+c\left(u_{d-k+1}, \dots, u_d\right) dz_1 \cdots dz_{d-k} \nonumber \\
+&=&
+C \left(u_1, \ldots, u_{d-k} | u_{d-k+1}, \dots, u_d\right)
+c\left(u_{d-k+1}, \dots, u_d\right) .
+\end{eqnarray}
+
+
+It is convenient to partition the association matrix as
+$$ \boldsymbol \Sigma = \left(
+\begin{array}{cc}
+ \boldsymbol \Sigma_{1:d-k,1:d-k} &  \boldsymbol \Sigma_{1:d-k,d-k+1:d}\\
+ \boldsymbol \Sigma_{1:d-k,d-k+1:d}^{\prime} &   \boldsymbol \Sigma_{d-k+1:d,d-k+1:d}
+\end{array}
+\right),$$
+so that  $\boldsymbol \Sigma_{1:d-k,1:d-k}$ is the submatrix for the first $d-k$ elements and similarly for the other entries.
+
+With this, for the Gaussian copula, we have
+
+
+$C \left(u_1, \ldots, u_{d-k} | u_{d-k+1}, \dots, u_d\right)$
+\begin{eqnarray}\label{E:MultivariateGauss}
+\ &=&
+\Pr \left( \Phi(N_1) \le u_1, \ldots, \Phi(N_{d-k}) \le u_{d-k} |
+\Phi(N_{d-k+1}) = u_{d-k+1}, \ldots, \Phi(N_{d}) = u_{d}
+\right) \nonumber \\
+&=&
+\Pr \left( N_1 \le \Phi^{-1}(u_1), \ldots, N_{d-k} \le \Phi^{-1}(u_{d-k}) |
+N_{d-k+1} = \Phi^{-1}(u_{d-k+1}), \ldots, N_{d} = \Phi^{-1}(u_{d})
+\right) \nonumber \\
+&=& \Phi_{d-k}\left(
+z_1 - \mu_{1 \cdot 2, 1}, \ldots, z_{d-k} - \mu_{1 \cdot 2, d-k} ; \boldsymbol \Sigma_{11 \cdot 2}
+\right) ,
+\end{eqnarray}
+
+Here, $\mu_{1 \cdot 2, j}$ is the $j$th component of
+$$ \boldsymbol \mu_{1 \cdot 2} = \boldsymbol \Sigma_{1:d-k,d-k+1:d} \boldsymbol \Sigma_{d-k+1:d,d-k+1:d}^{-1} \left(  \begin{array}{c} z_{d-k+1}\\ \vdots \\ z_{d} \end{array} \right) . $$
+Further, $\Phi_{d-k}(\cdot;  \boldsymbol \Sigma_{11 \cdot 2})$ is a $d-k$ dimensional multivariate normal distribution function with mean zero and variance-covariance matrix
+$$ \boldsymbol \Sigma_{11 \cdot 2} = \boldsymbol \Sigma_{1:d-k,1:d-k} -  \boldsymbol \Sigma_{1:d-k,d-k+1:d} \boldsymbol \Sigma_{d-k+1:d,d-k+1:d}^{-1} \boldsymbol \Sigma_{1:d-k,d-k+1:d}^{\prime} .$$
+
+
+## Derivatives for the Conditional Density/Mass Function  {#S:Appendix2}
+
+For the conditional hybrid probability density/mass function in equation \eqref{E:ConditionalDensity}, we need the case where $k=1$
+\begin{eqnarray}\label{E:PartialCop1}
+C_d \left(u_1, \ldots, u_d \right) &=&
+\frac{\partial}{\partial u_d} C(u_1, \ldots, u_d) =C \left(u_1, \ldots, u_{d-1} |  u_d\right) \\
+&=& \Phi_{d-1}\left(z_1 - \mu_{\{1, \ldots, d-1\} \cdot d, 1}, \ldots, z_{d-1} - \mu_{\{1, \ldots, d-1\} \cdot d, d-1} ; \boldsymbol \Sigma_{\{1, \ldots, d-1\} \cdot d}
+\right) , \notag
+\end{eqnarray}
+where
+$$ \boldsymbol \mu_{\{1, \ldots, d-1\} \cdot d} = \boldsymbol \Sigma_{1:d-1,d:d} ~z_{d}  $$
+and
+$$ \boldsymbol \Sigma_{\{1, \ldots, d-1\} \cdot d} = \boldsymbol \Sigma_{1:d-1,1:d-1} -  \boldsymbol \Sigma_{1:d-1,d:d}  \boldsymbol \Sigma_{1:d-1,d:d}^{\prime} .$$
+
+In the same way, for $k=2$, we have
+
+\begin{eqnarray}\label{E:PartialCop2}
+&&C_{d-1,d} \left(u_1, \ldots, u_d \right) =
+\frac{\partial^2}{\partial u_{d-1} \partial u_d} C(u_1, \ldots, u_d) \\
+&& \ \ \ =
+C \left(u_1, \ldots, u_{d-2} | u_{d-1}, u_d\right) c(u_{d-1}, u_d) \notag\\
+&& \ \ \ = \Phi_{d-2}\left(
+z_1 - \mu_{\{1, \ldots, d-2\} \cdot \{d-1,d\}, 1}, \ldots, z_{d-2} - \mu_{\{1, \ldots, d-2\} \cdot \{d-1,d\}, d-2} ; \boldsymbol \Sigma_{\{1, \ldots, d-2\} \cdot \{d-1,d\}}
+\right)  c(u_{d-1}, u_d), \notag
+\end{eqnarray}
+where
+$$\boldsymbol \mu_{\{1, \ldots, d-2\} \cdot \{d-1,d\}} = \boldsymbol \Sigma_{1:d-2,d-1:d} \boldsymbol \Sigma_{d-1:d,d-1:d}^{-1} \left(  \begin{array}{c} z_{d-1}\\ z_{d} \end{array} \right) $$
+and
+$$ \boldsymbol \Sigma_{\{1, \ldots, d-2\} \cdot \{d-1,d\}} = \boldsymbol \Sigma_{1:d-2,1:d-2} -  \boldsymbol \Sigma_{1:d-2,d-1:d} \boldsymbol \Sigma_{d-1:d,d-1:d}^{-1} \boldsymbol \Sigma_{1:d-2,d-1:d}^{\prime} .$$
+
+
+### Trivariate Gaussian Copula Distribution Functions {-}
+
+To illustrate, consider the trivariate case with $d=3$. For simplicity, we use the following generic expression for the association matrix
+$$
+\boldsymbol \Sigma  = \left(
+\begin{array}{ccccc}
+1         & \rho_{12}  & \rho_{13} \\
+\rho_{12} & 1          & \rho_{23} \\
+\rho_{13} & \rho_{23}  & 1 \\
+    \end{array}
+\right) .
+$$
+
+For a derivative with respect to one argument, we have
+$$
+C_3 \left(u_1, u_2, u_3 \right) =C \left(u_1, u_2 | u_3 \right) = \Phi_2 \left(
+z_1 - \mu_{12 \cdot 3, 1}, z_2 - \mu_{12 \cdot 3, 2} ; \boldsymbol \Sigma _{12 \cdot 3}
+\right)
+$$
+where
+$$
+\boldsymbol  \mu _{12 \cdot 3} =
+\left(\begin{array}{c} \mu_{12 \cdot 3, 1} \\ \mu_{12 \cdot 3, 2}  \\ \end{array}\right)
+=  z_3
+\left(\begin{array}{c}   \rho_{13} \\ \rho_{23}  \\ \end{array}\right)
+ \ \ \ \text{and} \ \ \
+\boldsymbol \Sigma_{12 \cdot 3} =
+\left(\begin{array}{cc} 1 & \rho_{12} \\ \rho_{12} & 1 \\ \end{array}\right)
+-
+\left(\begin{array}{c} \rho_{13} \\ \rho_{23}  \\ \end{array}\right)
+\left(\begin{array}{cc} \rho_{13} & \rho_{23}  \\ \end{array}\right) .
+$$
+
+For derivatives with respect to two arguments, we have
+$$
+C_{23} \left(u_1, u_2, u_3 \right) =
+C \left(u_1 | u_{2}, u_3\right)c \left(u_{2}, u_3\right)
+ \ \ \ \text{with} \ \ \
+C \left(u_1 | u_{2}, u_3\right) = \Phi\left( z_1 - \mu_{1 \cdot 23}; \sigma_{1 \cdot 23} \right) ,
+$$
+
+where
+$$
+\mu_{1 \cdot 23} =
+\left(\begin{array}{cc} \rho_{12} & \rho_{13} \\ \end{array}\right)
+\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}
+\left(\begin{array}{c} z_2  \\ z_3   \\  \end{array}\right)
+ \ \ \ \text{and} \ \ \
+\sigma_{1 \cdot 23} = 1-
+\left(\begin{array}{cc} \rho_{12} & \rho_{13} \\  \end{array}\right)
+\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}
+\left(\begin{array}{c} \rho_{12} \\ \rho_{13} \\  \end{array}\right) .
+$$
+

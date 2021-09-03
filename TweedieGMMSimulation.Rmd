@@ -1,0 +1,696 @@
+
+
+# Online Supplement 3. Simulation of Multivariate Tweedie
+
+## Background 
+
+This file documents the simulation study of the GMM estimation section of the paper *Joint Models of Insurance Lapsation and Claims*. A **.pdf** version provides a hard copy, the **.html** version allows one to hide `R` code and the **.Rmd** version allows one to run the simulation, changing input parameters as desired. (To run the **.Rmd**, search on **eval=FALSE** and change to **eval=TRUE**.)
+
+
+### Simulation Input Parameters
+
+```{r}
+MeanClaim <- 1000  
+nSim <- 2
+# Association (over years) parameter, Autoregressive of order one
+rhofVec <- c(0.6,0.3)
+#rhofVec <- c(.6)  
+# Tweedie dispersion parameter # With a mean=1000, phi=500 for 94% zeros
+# phi <- 2 for near continuous data, phi=42 for data for about half zeros
+#ExternalphiVec <- c(2,42,500)
+ExternalphiVec <- c(500)
+# Number of policyholders 
+#NsampVec <- c(100,250)
+NsampVec <- c(100)
+p <- 5                     # Number of years # DO NOT CHANGE
+
+```
+
+
+
+####R Packages Needed to Run this Simulation
+
+```{r comment="", message=FALSE, warning=FALSE}  
+# Here are the packages that you need to install to run this simulation
+library(tweedie)
+library(reshape)
+library(statmod)
+library(knitr)
+library(BB)
+library(MASS)
+library(copula)
+library(numDeriv)
+library(VineCopula)
+library(mvtnorm)
+time0 <- Sys.time()  -> time1 # define terms to check the run time
+
+```
+
+
+## Model Specification
+
+### Marginal Outcome Model
+
+We represent the marginal distributions of the claims random variables using a Tweedie distribution so that the distributions have a mass at zero and are otherwise positive. For each claim variable, we use a logarithmic link to form the mean claims of the form 
+$$\mu_{it} = \exp\left(\mathbf{x}_{it}^{\prime} \boldsymbol \beta\right).$$
+Each  claim is simulated using the Tweedie distribution, a mean, and two other parameters, $\phi$ (for dispersion) and $P$ (the *power* parameter). 
+
+Recall, for a Tweedie distribution, that the variance is $\phi_j \mu^{P}$. For this simulation study, we use $P=1.67$ based on our experiences analyzing real insurance data sets. In the Tweedie model, the probability of a zero claim is $e^{-\lambda}$, where $\lambda = \mu^{2-P} /(\phi*(2-P))$. 
+
+The regression coefficients in the vector $\boldsymbol \beta$ were set so that the average mean was approximately $\mu = 1000$. With this, the probability of a zero claim is $\exp\left[-1000^{0.33}/(\phi*0.33)\right]$. For example, by selecting $\phi=42$, the probability of a zero claim is 49.4\%, or about half zeros. In the same way, the choice of $\phi=2$ represents almost no zeros (continuous data) and
+$\phi=500$ represents 94\% zeros (common in personal insurance lines of business). So, if we use $\mu = 1000$, then the probability of a zero claim is $\exp\left[-1000^{0.33}/(\phi*0.33)\right]$. For example, by selecting $\phi=42$, the probability of a zero claim is `r round(100*exp(-1000**(0.33)/(42*0.33)),1)`\%.
+
+
+In addition to the claims, we have two rating (explanatory) variables:
+
+-  $x_1$ a binary variable that takes on values 1 or 2 depending on whether or not an attribute holds, and
+
+-  $x_2$ a generic continuous explanatory variable.
+
+#### R Code for Generating Covariates
+
+```{r } 
+# Generate covariates and means
+# Time constant Bernoulli variable
+Generate_Covariates <- function(Nsamp) {
+  x11   <- 1+rbinom(Nsamp, size=1, prob=0.4)
+  x1    <- cbind(x11,x11,x11,x11,x11)
+  x2    <- matrix(1+(rnorm(p*Nsamp)^2/10),nrow=Nsamp,ncol=p)
+  beta1 <- 2
+  beta2 <- 0.3
+  mu1   <- exp((beta1*x11+beta2*x2)/2)
+  mu    <- MeanClaim*mu1/mean(mu1) # Rescale so that the mean claim is MeanClaim
+  Z <- cbind(x1,x2,mu)
+  return(Z)
+  }
+```
+
+
+### Dependence Model {#S:DependenceModel}
+
+Claims are associated using a Gaussian copula with an autoregressive of order 1 ($AR1$) pattern determined by the autocorrelation parameter $\rho$. With $p=5$ time series replications, the association matrix is
+
+$$
+\boldsymbol \Sigma  = \left(
+\begin{array}{ccccc}
+1         & \rho  & \rho^2 & \rho^3 & \rho^4  \\
+\rho & 1  & \rho   & \rho^2 & \rho^3\\
+\rho^2 & \rho  & 1 & \rho   & \rho^2\\
+\rho^3 &\rho^2 & \rho  & 1 & \rho \\
+\rho^4 &\rho^3 &\rho^2 & \rho  & 1 \\
+    \end{array}
+\right) .
+$$
+
+
+#### R Code for Simulating Dependent Outcomes
+
+```{r }  
+Generate_SampleData <- function(rhof,Nsamp,Externalphi,Z) {
+  # AR(1) Dependence Structure
+  BigSigma <- matrix(c(1,rhof^1,rhof^2,rhof^3,rhof^4,
+                    rhof^1,1,rhof^1,rhof^2,rhof^3,
+                    rhof^2,rhof^1,1,rhof^1,rhof^2,
+                    rhof^3,rhof^2,rhof^1,1,rhof^1,
+                    rhof^4,rhof^3,rhof^2,rhof^1,1),nrow=5,ncol=5)
+  BigSigma <- chol(BigSigma)
+  # Start with dependent multivariate Gaussian
+  Z1      <- matrix(rnorm(p*Nsamp),nrow=Nsamp,ncol=p)%*%BigSigma
+  UCop    <- pnorm(Z1)
+  muVec   <- as.vector(matrix(Z[,11:15],nrow=Nsamp*p,ncol=1))
+  UCopVec <- as.vector(matrix(UCop,nrow=Nsamp*p,ncol=1))
+  # Simulate Tweedie claims
+  Claims  <- qtweedie(UCopVec, power=Externalxi, mu=muVec, phi=Externalphi)
+  yearMat <- t(matrix(rep(1:p,Nsamp),nrow=p,ncol=Nsamp))
+  PolIDMat<- t(matrix(rep(1:Nsamp,each=p),nrow=p,ncol=Nsamp))
+  year    <- rep(1:p,Nsamp)
+  PolID   <- rep(1:Nsamp, each=p)
+  SampleData <- as.data.frame(cbind(
+    Claims,
+    matrix(yearMat, nrow=Nsamp*p,ncol=1),
+    matrix(PolIDMat,nrow=Nsamp*p,ncol=1),
+    matrix(Z[,1:1], nrow=Nsamp*p,ncol=1),
+    matrix(Z[,6:10],nrow=Nsamp*p,ncol=1),
+    matrix(muVec,   nrow=Nsamp*p,ncol=1) ))
+  colnames(SampleData) <- c("Claims","year","PolID","x1","x2","mu")
+  SampleData <- SampleData[order(SampleData$PolID,SampleData$year),]
+  return(SampleData)
+  }
+
+```
+
+## Tweedie (Claims) Regression Estimation
+
+The Tweedie is commonly used in insurance applications for claims. In part, this is because it can be expressed as a generalized linear model. In the following illustrative code, we have skipped the determination of the $power$ parameter ($P=1.67$ for us). 
+
+#### R Code for Tweedie Regression Estimation
+
+\scalefont{0.8}
+
+```{r comment="", message=FALSE, warning=FALSE, tidy = TRUE}
+
+fit_MargRegress <- function(SampleData){
+phiAssumed <- Externalphi           # Use this if the tweedie regression does not converge
+SampleData$fitted <- SampleData$mu  # Use this if the tweedie regression does not converge
+Z2 <- data.frame(y=SampleData$Claims,x1=SampleData$x1,x2=SampleData$x2)
+tryCatch({
+   tweedie.fit <- glm(y ~.,data=Z2,control=glm.control(maxit=500),family=tweedie(var.power=Externalxi, link.power=0))
+   phiAssumed  <- summary(tweedie.fit)$dis   
+   SampleData$fitted <- tweedie.fit$fitted.values
+   },
+   error = function(err) {
+   print(paste("Tweedie did not converge:",err))  
+   NonConvergeTweedie <- NonConvergeTweedie+1
+   return(NonConvergeTweedie)
+   })
+#Probability Integral Transform
+dfTweedieA            <- ptweedie(SampleData$Claims,xi=Externalxi,mu=SampleData$fitted,phi=phiAssumed)
+SampleData$dfTweedie  <- pmin(pmax( 1e-05,dfTweedieA),.99999)
+return(SampleData)
+}
+
+```
+
+\scalefont{1.25}
+
+##Joint Model Specification 
+
+For more background, see the Appendix Section on **Hybrid Distributions**.
+
+
+###Tweedie Likelihoods {#S:TweedieLike}
+
+In insurance, it is common to refer to a random variable with a mass at zero and a continuous density over the positive reals as a Tweedie random variable (corresponding to a Tweedie distribution). Suppose that both $Y_j$ and $Y_k$ are Tweedie random variables. The joint distribution function has a hybrid probability density/mass function of the form:
+
+$$
+f_{jk}(y_j,y_k) = \left\{
+\begin{array}{ll}
+\Pr(Y_{j} =0, Y_{k}=0) = F_{jk}(0,0) \ \ \ \       & y_j=0,y_k=0 \\
+C_1 \left(F_j(y_j), F_k(0) \right) f_j(y_j)        & y_j>0,y_k=0 \\
+C_2 \left( F_j(0),F_k(y_k)\right) f_k(y_k)         & y_j=0,y_k>0\\
+c\left( F_j(y_j),F_k(y_k)\right)f_j(y_j) f_k(y_k)  & y_j>0,y_k>0 .
+\end{array} \right.
+$$
+
+To illustrate, when both observations are 0, then the likelihood $F_{jk}(0,0) = C\left(F_{j}(0),F_{k}(0) \right)$ requires evaluation of the distribution function $C$. With a Gaussian copula, this is a two-dimensional integral. 
+
+####R Code for Pairwise Likelihood Functions 
+
+```{r  tidy = TRUE}
+# These are the four cases from the hybrid joint mass/density function
+Create_Data_Subsets <- function(SampleData) {
+  # Reshape the data
+  TweedieLike1 <- SampleData[order(-SampleData$PolID, SampleData$year),]
+  VarsLike <- c("PolID", "year", "Claims","dfTweedie")
+  TweedieLike  <- TweedieLike1[VarsLike]
+  TweedieLike2 <- melt(TweedieLike, id=c("PolID", "year"), measured=c("Claims", "dfTweedie"))
+  TweedieLike3 <- (cast(TweedieLike2, PolID ~ variable ~ year))
+  calcOrder    <- 1:length(TweedieLike3[,1,1])
+  amd1 <- NA;amd2 <- NA;amd3 <- NA;amd4 <- NA
+  tcount <- 0
+  for (t1 in 1:4) {
+    for (t2 in (t1+1):5) {tcount <- tcount+1
+    caset1t2 <- 1*(TweedieLike3[,1,t1]==0)*(TweedieLike3[,1,t2]==0)+
+                2*(TweedieLike3[,1,t1]>0) *(TweedieLike3[,1,t2]==0)+
+                3*(TweedieLike3[,1,t1]==0)*(TweedieLike3[,1,t2]>0)+
+                4*(TweedieLike3[,1,t1]>0) *(TweedieLike3[,1,t2]>0)
+    u   <- cbind(TweedieLike3[,2,t1],TweedieLike3[,2,t2])
+    zu  <- qnorm(u)
+    mydata <- data.frame(caset1t2,u,zu,calcOrder)
+    names(mydata) <- c("caset1t2","u1", "u2","zu1", "zu2","calcOrder") 
+    mydata1 <- mydata[which(caset1t2==1),]
+    mydata2 <- mydata[which(caset1t2==2),]
+    mydata3 <- mydata[which(caset1t2==3),]
+    mydata4 <- mydata[which(caset1t2==4),]
+    amd1 <- c(amd1,list(mydata1))
+    amd2 <- c(amd2,list(mydata2))
+    amd3 <- c(amd3,list(mydata3))
+    amd4 <- c(amd4,list(mydata4))
+    } }
+    totalallmydata <- list(amd1[-1],amd2[-1],amd3[-1],amd4[-1])
+    return(totalallmydata)
+}
+
+```
+
+
+
+```{r}
+PairLikeTime <- function(t1,t2,rhos) {
+  rhos   <- pmin(pmax(-.99,rhos),.99)
+  sigma  <- matrix(c(1,rhos,rhos,1),nrow=2,ncol=2)
+  likehd <- 0*calcOrder
+  tcount <- (t1==1)*(t2-1) + (t1==2)*(t2+2) + (t1==3)*(t2+4) + (t1==4)*10
+  mydata1 <- totalallmydata[[1]][[tcount]]
+  mydata2 <- totalallmydata[[2]][[tcount]]
+  mydata3 <- totalallmydata[[3]][[tcount]]
+  mydata4 <- totalallmydata[[4]][[tcount]]
+# See the VineCopula package for the functions 'BiCopCDF', 'BiCopHfunc', and 'BiCopPDF'
+  if (nrow(mydata1)>0) {likehd[mydata1$calcOrder] <-
+    BiCopCDF(mydata1$u1,mydata1$u2, family=1, par=rhos)
+  }
+  if (nrow(mydata2)>0) {likehd[mydata2$calcOrder] <-
+    BiCopHfunc1(mydata2$u1,mydata2$u2, family=1, par=rhos)
+  }
+  if (nrow(mydata3)>0) {likehd[mydata3$calcOrder] <-
+    BiCopHfunc2(mydata3$u1,mydata3$u2, family=1, par=rhos)
+  }
+  if (nrow(mydata4)>0) {likehd[mydata4$calcOrder] <- 
+    BiCopPDF(mydata4$u1,mydata4$u2, family=1, par=rhos)
+  }
+  return(log(likehd))
+}
+
+```
+
+####More Pairwise Functions 
+
+```{r}
+PairLikeSum <- function(rhos) {
+  LikelihoodSum <- 0
+  for (t1 in 1:4) {
+    for (t2 in (t1+1):5) {rhoAR1 <- rhos^(abs(t2-t1))
+      LikelihoodSum <- LikelihoodSum + sum(PairLikeTime(t1,t2,rhoAR1)) 
+      } }
+  return(-LikelihoodSum)
+}
+
+PLogLikelihood <- function(rhos) {
+  VecLogLike <- NA
+  for (t1 in 1:4) 
+    {for (t2 in (t1+1):5) {rhoAR1 <- rhos^(abs(t2-t1))
+      VecLogLike <- cbind(VecLogLike,PairLikeTime(t1,t2,rhoAR1)) 
+      } }
+  return(VecLogLike[,-1])
+}
+
+```
+
+###Evaluation of GMM Scores {#S:GMMScoreEval}
+
+For a recursive method such as the *GMM*, one needs starting values for the recursion. We will use the likelihood estimators developed in Section 3.1. With the initial estimator, we can now calculate the *GMM* score function. This allows us to minimize this function in order to get our *GMM* estimator, with an asymptotic variance.
+
+
+We now evaluate the scores. For two zero outcomes, the score can be expressed as
+$$\begin{array}{cl}
+g_{\theta,jk}(0,0)  = \partial_{\theta}  \ln f_{jk}(0,0)  = { \frac{\partial_{\theta} \left\{C \left( F_j(0),F_k(0)\right)\right\}}
+{C \left( F_j(0),F_k(0)\right) } }.
+\end{array}$$
+
+
+For a zero and a positive $y_k>0$ outcome, we have
+$$\begin{array}{cl}
+g_{\theta,jk}(0,y_k)
+ = \partial_{\theta}  \ln \left[
+ \left\{C_2 \left( F_j(0),F_k(y_k)\right)  \right\} f_k(y_k) \right] = { \frac{\partial_{\theta} \left\{ C_2 \left( F_j(0),F_k(y_k)\right)  \right\}}
+{C_2 \left( F_j(0),F_k(y_k)\right) } }
+\end{array}$$
+
+
+For two positive outcomes, $y_j$ and $y_k$, we have
+$$\begin{array}{cl}
+g_{\theta,jk}(y_j,y_k)&= \partial_{\theta}  \ln \left[  c(F_{Y_{j}}(y_j), F_{Y_{k}}(y_k)) f_{j}(y_j) f_{k}(y_k) \right] =  \frac{\partial_{\theta}  ~  c(F_{Y_{j}}(y_j), F_{Y_{k}}(y_k))}
+                         { c(F_{Y_{j}}(y_j), F_{Y_{k}}(y_k))} .
+\end{array}$$
+
+####R Code for GMM Functions 
+
+```{r}
+# GMM Functions
+scoreTime <- function(t1,t2,rhos) {
+  rhos  <- pmin(pmax(-.99,rhos),.99)
+  sigma <- matrix(c(1,rhos,rhos,1),nrow=2,ncol=2)
+  score <- 0*calcOrder
+  tcount  <- (t1==1)*(t2-1) + (t1==2)*(t2+2) + (t1==3)*(t2+4) + (t1==4)*10
+  mydata1 <- totalallmydata[[1]][[tcount]]
+  mydata2 <- totalallmydata[[2]][[tcount]]
+  mydata3 <- totalallmydata[[3]][[tcount]]
+  mydata4 <- totalallmydata[[4]][[tcount]]
+  if (nrow(mydata1)>0) {score[mydata1$calcOrder] =
+    dmvnorm(cbind(mydata1$zu1,mydata1$zu2), mean=rep(0, 2), sigma=sigma, log=FALSE) /
+    BiCopCDF(mydata1$u1,mydata1$u2, family=1, par=rhos)
+  }
+  if (nrow(mydata2)>0) {score[mydata2$calcOrder] <- 
+    BiCopHfuncDeriv(mydata2$u2,mydata2$u1, family=1, par=rhos, deriv="par")  /
+    BiCopHfunc1(mydata2$u1,mydata2$u2, family=1, par=rhos)
+  }
+  if (nrow(mydata3)>0) {score[mydata3$calcOrder] <-  
+    BiCopHfuncDeriv(mydata3$u1,mydata3$u2, family=1, par=rhos, deriv="par")  /
+    BiCopHfunc2(mydata3$u1,mydata3$u2, family=1, par=rhos)
+  }
+  if (nrow(mydata4)>0) {score[mydata4$calcOrder] <-  
+    BiCopDeriv(mydata4$u1,mydata4$u2, family=1, par=rhos, deriv="par", log=FALSE) /
+    BiCopPDF(mydata4$u1,mydata4$u2, family=1, par=rhos)
+  }
+  return(score)
+}
+
+```
+
+####More GMM Functions 
+
+Although $g_{\theta}$ is a mean zero vector containing information about $\theta$, the number of elements in $g_{\theta}$ exceeds the number of parameters and so we use GMM to estimate the parameters. Specifically, the GMM estimator of $\theta$, say $\theta_{GMM}$, is the minimizer of the expression $g_{\theta} \left( \mathrm{Var~} g_{\hat{\theta}} \right)^{-1} g_{\theta}^{\prime}$. To implement this, we use the plug-in estimator of the variance
+$$ \mathrm{\widehat{Var}}~g_{\hat{\theta}} = \frac{1}{n} \sum_{i=1}^n g_{\hat{\theta},i}(Y_{i1}, \ldots, Y_{ip})~g_{\hat{\theta},i}(Y_{i1}, \ldots, Y_{ip})^{\prime}. $$
+
+For this example, there are ${5\choose 2} = 10$ different scores, so that the dimensions of $\mathrm{\widehat{Var}}~g_{\hat{\theta}}$ is $10 \times 10$. Because this can be unstable for small samples, we also combine the scores in some fashion. 
+
+```{r}
+scoreTimeVec <- function(rhos) {
+  tcount <- 0
+  ScoreMat <- NA
+  for (t1 in 1:4) {
+    for (t2 in (t1+1):5) {tcount <- tcount+1
+      rhoAR1   <- rhos^(abs(t2-t1))
+      temp     <- scoreTime(t1,t2,rhoAR1)*abs(t2-t1)*rhos^(abs(t2-t1-1))
+      ScoreMat <- cbind(ScoreMat,temp)
+    } }
+  return(ScoreMat[,-1])
+}
+GMMFunc <- function(rhos) {temp <- colSums(scoreTimeVec(rhos))
+  t(temp) %*% VarhatInv %*% temp
+}  
+
+scoreTimeVecA <- function(rhos) {
+  # Treats Lag One as important, groups others
+  tcount <- 0
+  ScoreMat <- NA
+  for (t1 in 1:4) {
+    for (t2 in (t1+1):5) {tcount <- tcount+1
+      rhoAR1   <- rhos^(abs(t2-t1))
+      temp     <- scoreTime(t1,t2,rhoAR1)*abs(t2-t1)*rhos^(abs(t2-t1-1))
+      ScoreMat <- cbind(ScoreMat,temp)
+    } }
+    ScoreMatA <- ScoreMat[,-1]
+    ScoreMatB <- ScoreMatA[,c(1,5,8,10)]
+    ScoreMatC <- ScoreMatA[,2]+ScoreMatA[,3]+ScoreMatA[,4]+
+                 ScoreMatA[,6]+ScoreMatA[,7]+ScoreMatA[,9]
+  return(cbind(ScoreMatB,ScoreMatC))
+}
+
+GMMFuncA <- function(rhos) {temp <- colSums(scoreTimeVecA(rhos))
+  t(temp) %*% VarhatInvA %*% temp  
+}
+
+```
+
+
+### R Code for the Simulation Loop
+
+This code produces the simulation results. As noted above, to run the **.Rmd**, change **eval=FALSE** to **eval=TRUE**.
+
+\scalefont{0.8}
+
+```{r comment="", eval=FALSE, tidy = TRUE}
+time1 <- Sys.time()
+set.seed(123457)
+NumRuns     <- length(rhofVec)*length(ExternalphiVec)*length(NsampVec)
+OverResults <- matrix(0,nrow=NumRuns,ncol=11)
+colnames(OverResults) <- c("NumSim","NumSamp","phi","rho",
+                           "PairBias","PairSqRootMSE","PairAvgSE","GMMBias","GMMSqRootMSE","GMMAvgSE","TimeTaken")
+ResultsSim         <- matrix(0,nrow=nSim,ncol=4)
+iResultCount       <- 0
+NonConvergeTweedie <- 0
+
+for (iNsamp in 1:length(NsampVec)) {
+for (iExternalphi in 1:length(ExternalphiVec)) {
+for (irhof in 1:length(rhofVec)) {
+  iResultCount <- iResultCount + 1
+  OverResults[iResultCount,1] <- nSim
+  OverResults[iResultCount,2] <- NsampVec[iNsamp] -> Nsamp
+  OverResults[iResultCount,3] <- ExternalphiVec[iExternalphi] ->  Externalphi        
+  OverResults[iResultCount,4] <- rhofVec[irhof] ->  rhof      
+
+#  Start Simulation Loop      
+for (iSim in 1:nSim) {
+  #  Generate Covariates
+  Z <- Generate_Covariates(Nsamp)
+  Externalxi <- 1.67 # Tweedie power parameter 
+  #  Generate Data
+  SampleData <- Generate_SampleData(rhof=rhof, Nsamp=Nsamp,Externalphi=Externalphi,Z)
+  #  Fit Regression
+  SampleData <- fit_MargRegress(SampleData)
+  # Reshape the data
+  SampleData     <- SampleData[order(-SampleData$PolID, SampleData$year),]
+  calcOrder      <- 1:(length(SampleData$PolID)/p)
+  totalallmydata <- Create_Data_Subsets(SampleData)
+  # Pairwise parameter estimate
+  PLikeResult   <- optim(par=0,fn=PairLikeSum,method=c("L-BFGS-B"), control=list(factr=10^10))
+  PLikeEstimate <- PLikeResult$par -> ResultsSim[iSim,1]
+  gradient      <- jacobian(func=PLogLikelihood,PLikeResult$par, method="simple",method.args=list(eps=5e-3))
+  PLstderror    <- 1/sqrt(sum(gradient^2)) -> ResultsSim[iSim,2]
+
+  # GMM parameter estimate
+  GHatA           <- scoreTimeVecA(PLikeEstimate)
+  VarhatInvA      <- ginv(t(GHatA) %*% GHatA)
+  GMMResult       <- optim(par=PLikeEstimate,fn=GMMFuncA,method=c("L-BFGS-B"), control=list(factr=10^10))
+  FinalEstimate   <- GMMResult$par  -> ResultsSim[iSim,3]
+  gradient        <- jacobian(func=scoreTimeVecA,FinalEstimate, method="simple",method.args=list(eps=5e-3))
+  GMMstderror     <- 1/sqrt(sum(gradient^2))  -> ResultsSim[iSim,4]
+  
+
+}    # This finishes the simulation loop
+
+#round(ResultsSim,digits=3)
+AverResults <- colMeans(ResultsSim)
+VarResults <-  colMeans(ResultsSim*ResultsSim) - (colMeans(ResultsSim))^2 
+OverResults[iResultCount,5]  <- AverResults[1] - rhof 
+OverResults[iResultCount,6]  <- sqrt(VarResults[1] + OverResults[iResultCount,5]^2)/sqrt(nSim)
+OverResults[iResultCount,7]  <- AverResults[2]
+OverResults[iResultCount,8]  <- AverResults[3] - rhof
+OverResults[iResultCount,9]  <- sqrt(VarResults[3] + OverResults[iResultCount,8]^2)/sqrt(nSim)
+OverResults[iResultCount,10] <- AverResults[4]
+OverResults[iResultCount,11] <- difftime(Sys.time(), time1, units='mins')
+time1 <- Sys.time();
+write.csv(OverResults,"GMMSimResultsNewScoresApril2018c.csv",row.names=F)
+  }
+  }
+  }
+round(OverResults,digits=4)
+OverResultsTemp <- OverResults
+
+# Number of Non convergence for Tweedie Fits
+NonConvergeTweedie
+
+```
+
+\scalefont{1.25}
+
+## Simulation Results
+
+We ran this program several times and collect results in the following.
+
+### Basic Output
+
+The following table compares pairwise likelihood and GMM estimators by different choices of the sample size $n$, the proportion of zeros through the parameter $\phi$, and the autocorrelation parameter $\rho$.The study is based on 500 simulations. The $Bias$ gives the average estimator centered about the true parameter ($\theta=\rho$). The $\sqrt{MSE}$ is the average squared deviation of the simulated estimate from the true parameter divided by the square root of the number of simulations. These statistics indicate that both procedures do well, on average, and that the simulation size is sufficient for demonstration purposes. It is not surprising that the quality of the estimators decreases as the proportion of zeros increase, e.g., the largest biases (in absolute value) occur for $\phi=500$, corresponding to approximately 94\% zeros. It is also not surprising that the quality of the estimators increases as the sample size increases from $n=100$ to $n=250$.
+
+The table also provides $AvgSE$, the average asymptotic standard error of the estimators. The squared ratio of $AvgSE$ for the pairwise likelihood and $GMM$ estimators gives the *Ratio Var* column, a measure of relative estimator efficiency. All values of this column exceed one indicating that, as anticipated, the $GMM$ estimator has a lower standard error than the pairwise estimator. In this sense it is more efficient. We also calculated the corresponsding mean square erro, given in the *Ratio MSE* column, as the ratio of the bias squared plus the standard error squared of each estimator. In these small samples, we see that the *GMM* does not always outperform the pairwise estimator, particularly for data with more discreteness (as $\phi$ becomes larger) and as the association parameter $\rho$ increases. We address these instances in the next two subsections.
+
+
+
+$${\small \begin{matrix}
+\begin{array}{cccr|rrr|rrr|r|rr}\hline
+    \textbf{Num} & \textit{n} & \phi & \rho & {\textbf{Pair}} & {\textbf{Pair}} & {\textbf{Pair}} & {\textbf{GMM}} & {\textbf{GMM}} & {\textbf{GMM}} & {\textbf{Time}} & {\textbf{Ratio}} & {\textbf{Ratio}} \\
+    \textbf{Sim} &   &       &       & {\textbf{Bias}} & \sqrt{MSE} & {\textbf{AvgSE}} & {\textbf{Bias}} & \sqrt{MSE} & {\textbf{AvgSE}} & {\textbf{Taken}} & {\textbf{Var}} & {\textbf{MSE}} \\
+    \hline
+    500   & 100   & 2     & -0.3  & -0.002 & 0.002 & 0.040 & 0.033 & 0.003 & 0.014 & 23.87 & 8.32  & 1.21 \\
+    500   & 100   & 2     & 0     & -0.008 & 0.002 & 0.050 & -0.004 & 0.001 & 0.018 & 25.39 & 7.93  & 7.70 \\
+    500   & 100   & 2     & 0.3   & 0.002 & 0.002 & 0.039 & -0.031 & 0.003 & 0.013 & 24.01 & 8.50  & 1.37 \\
+    500   & 100   & 2     & 0.6   & -0.009 & 0.002 & 0.021 & -0.014 & 0.002 & 0.004 & 24.93 & 24.06 & 2.49 \\
+    500   & 100   & 42    & -0.3  & 0.009 & 0.003 & 0.050 & 0.060 & 0.004 & 0.021 & 26.95 & 5.93  & 0.65 \\
+    500   & 100   & 42    & 0     & -0.004 & 0.003 & 0.060 & -0.002 & 0.001 & 0.025 & 32.70 & 5.68  & 5.66 \\
+    500   & 100   & 42    & 0.3   & -0.008 & 0.003 & 0.049 & -0.058 & 0.004 & 0.021 & 28.24 & 5.58  & 0.64 \\
+    500   & 100   & 42    & 0.6   & -0.014 & 0.003 & 0.028 & -0.032 & 0.003 & 0.007 & 36.13 & 13.81 & 0.89 \\
+    500   & 100   & 500   & -0.3  & -0.008 & 0.008 & 0.357 & -0.002 & 0.008 & 0.088 & 62.02 & 16.61 & 16.60 \\
+    500   & 100   & 500   & 0     & -0.074 & 0.010 & 0.303 & -0.080 & 0.010 & 0.089 & 67.99 & 11.70 & 6.82 \\
+    500   & 100   & 500   & 0.3   & -0.063 & 0.010 & 0.174 & -0.114 & 0.010 & 0.069 & 63.92 & 6.39  & 1.93 \\
+    500   & 100   & 500   & 0.6   & -0.054 & 0.006 & 0.088 & -0.108 & 0.009 & 0.034 & 62.07 & 6.56  & 0.83 \\
+    \hline
+    500   & 250   & 2     & -0.3  & 0.002 & 0.001 & 0.025 & 0.020 & 0.002 & 0.008 & 53.96 & 9.10  & 1.34 \\
+    500   & 250   & 2     & 0     & -0.003 & 0.001 & 0.032 & -0.001 & 0.001 & 0.011 & 55.48 & 7.95  & 7.93 \\
+    500   & 250   & 2     & 0.3   & -0.004 & 0.001 & 0.025 & -0.020 & 0.002 & 0.008 & 54.20 & 9.29  & 1.36 \\
+    500   & 250   & 2     & 0.6   & -0.003 & 0.001 & 0.013 & -0.004 & 0.001 & 0.003 & 55.65 & 26.50 & 7.46 \\
+    500   & 250   & 42    & -0.3  & 0.002 & 0.002 & 0.032 & 0.030 & 0.002 & 0.012 & 55.61 & 6.70  & 0.95 \\
+    500   & 250   & 42    & 0     & -0.001 & 0.002 & 0.039 & -0.001 & 0.001 & 0.016 & 68.68 & 5.80  & 5.79 \\
+    500   & 250   & 42    & 0.3   & -0.001 & 0.002 & 0.031 & -0.028 & 0.002 & 0.012 & 59.50 & 6.22  & 0.99 \\
+    500   & 250   & 42    & 0.6   & -0.007 & 0.002 & 0.017 & -0.014 & 0.002 & 0.004 & 75.17 & 16.66 & 1.65 \\
+    500   & 250   & 500   & -0.3  & -0.006 & 0.006 & 0.167 & -0.003 & 0.006 & 0.047 & 132.74 & 12.43 & 12.38 \\
+    500   & 250   & 500   & 0     & -0.022 & 0.006 & 0.139 & -0.040 & 0.006 & 0.050 & 154.28 & 7.82  & 4.83 \\
+    500   & 250   & 500   & 0.3   & -0.018 & 0.005 & 0.093 & -0.111 & 0.007 & 0.042 & 131.65 & 4.92  & 0.64 \\
+    500   & 250   & 500   & 0.6   & -0.030 & 0.004 & 0.052 & -0.099 & 0.006 & 0.022 & 140.49 & 5.40  & 0.35 \\
+    \hline
+\end{array}\end{matrix}}$$
+
+###Larger Sample Sizes
+
+One thing to verify is whether the lack of efficiency is simply a small sample characteristic - we can do this check by increasing the sample size. The following table summarizes results in the same fashion as the earlier subsection. Note that the number of simulations is smaller so that the run *Time Taken* (given in minutes) is kept to a manageable level while the $\sqrt{MSE}$ column suggests that the estimates do not suffer overly from simulation error. By increasing the sample size to $n=2000$, we see that the $GMM$ is now more efficient in all scenarios for the *Ratio Var* criterion and all but one for the *Ratio MSE*. For the latter, it was only the case of substantial discreteness $\phi=500$ and strong correlation $\rho=0.3$ where the *GMM* was outperformed by the pairwise estimator.
+
+
+
+$${\small \begin{matrix}
+\begin{array}{cccr|rrr|rrr|r|rr}\hline
+    \textbf{Num} & \textit{n} & \phi & \rho & {\textbf{Pair}} & {\textbf{Pair}} & {\textbf{Pair}} & {\textbf{GMM}} & {\textbf{GMM}} & {\textbf{GMM}} & {\textbf{Time}} & {\textbf{Ratio}} & {\textbf{Ratio}} \\
+    \textbf{Sim} &   &       &       & {\textbf{Bias}} & \sqrt{MSE} & {\textbf{AvgSE}} & {\textbf{Bias}} & \sqrt{MSE} & {\textbf{AvgSE}} & {\textbf{Taken}} & {\textbf{Var}} & {\textbf{MSE}} \\
+    \hline
+    100   & 2000  & 2     & -0.3  & 0.000 & 0.001 & 0.009 & 0.003 & 0.001 & 0.003 & 83.28 & 10.06 & 4.30 \\
+    100   & 2000  & 2     & 0     & -0.001 & 0.001 & 0.011 & 0.000 & 0.001 & 0.004 & 82.96 & 8.00  & 7.98 \\
+    100   & 2000  & 2     & 0.3   & 0.001 & 0.001 & 0.009 & -0.002 & 0.001 & 0.003 & 82.28 & 10.23 & 7.11 \\
+    100   & 2000  & 2     & 0.6   & 0.000 & 0.001 & 0.005 & 0.000 & 0.001 & 0.001 & 84.20 & 27.46 & 25.61 \\
+    100   & 2000  & 42    & -0.3  & 0.000 & 0.001 & 0.011 & 0.005 & 0.001 & 0.004 & 91.07 & 7.75  & 3.43 \\
+    100   & 2000  & 42    & 0     & -0.001 & 0.001 & 0.014 & -0.001 & 0.001 & 0.006 & 104.59 & 5.84  & 5.80 \\
+    100   & 2000  & 42    & 0.3   & -0.001 & 0.001 & 0.011 & -0.005 & 0.001 & 0.004 & 99.56 & 6.99  & 2.63 \\
+    100   & 2000  & 42    & 0.6   & 0.000 & 0.001 & 0.006 & -0.001 & 0.001 & 0.001 & 123.75 & 18.78 & 13.36 \\
+    100   & 2000  & 500   & -0.3  & 0.010 & 0.005 & 0.049 & -0.018 & 0.009 & 0.014 & 189.38 & 13.10 & 5.14 \\
+    100   & 2000  & 500   & 0     & 0.005 & 0.005 & 0.045 & -0.003 & 0.002 & 0.017 & 265.28 & 7.00  & 6.90 \\
+    100   & 2000  & 500   & 0.3   & -0.003 & 0.004 & 0.032 & -0.042 & 0.007 & 0.015 & 185.25 & 4.86  & 0.52 \\
+    100   & 2000  & 500   & 0.6   & 0.002 & 0.003 & 0.017 & -0.010 & 0.003 & 0.005 & 213.20 & 9.88  & 2.19 \\ \hline
+    100   & 5000  & 2     & -0.3  & -0.001 & 0.001 & 0.006 & 0.000 & 0.001 & 0.002 & 208.61 & 10.24 & 10.37 \\
+    100   & 5000  & 2     & 0     & -0.001 & 0.001 & 0.007 & -0.001 & 0.000 & 0.002 & 206.97 & 7.99  & 7.93 \\
+    100   & 5000  & 2     & 0.3   & 0.000 & 0.001 & 0.006 & -0.002 & 0.001 & 0.002 & 208.73 & 10.29 & 4.02 \\
+    \hline
+\end{array}\end{matrix}}
+$$
+
+
+###Alternative Score Methods
+
+Although the *GMM* estimator is better asymptotically, one would like variations of it where it also does well in smaller sample sizes. Our prior analyses used the basic estimator that is based on the vector of scores
+$$
+g_{\theta,i}(Y_{i1}, \ldots, Y_{ip}) =
+\left(\begin{array}{c}
+        g_{\theta,i12}(Y_{i1},Y_{i2}) \\
+        \vdots \\
+        g_{\theta,i1p}(Y_{i1},Y_{ip}) \\
+        \vdots \\
+        g_{\theta,i,p-1,p}(Y_{i,p-1},Y_{ip})
+      \end{array}
+\right)$$
+a column vector ${5\choose 2} = 10$ different scores. Thus, the dimensions of $\mathrm{\widehat{Var}}~g_{\hat{\theta}}$ is $10 \times 10$. This can be unstable for small samples - as an alternative, we propose combining the scores. 
+
+For the table below, we retained the scores corresponding to one time period separation and grouped the others. The argument is that the information in a score at times $s$ and $t$ is $\rho^{|t-s|}$, so the more time separation the less information there is about the parameter $\rho$. With the resulting five scores, the dimension of $\mathrm{\widehat{Var}}~g_{\hat{\theta}}$ is $5 \times 5$; the estimation of this is presumably more stable.
+
+
+The following table shows that this conjecture is substantiated. All efficiency measures *Ratio MSE* are greater than 1 for $n=250$ and all but one for $n=100$.
+
+
+$${\small \begin{matrix}
+\begin{array}{cccr|rrr|rrr|r|rr}\hline
+    \textbf{Num} & \textit{n} & \phi & \rho & {\textbf{Pair}} & {\textbf{Pair}} & {\textbf{Pair}} & {\textbf{GMM}} & {\textbf{GMM}} & {\textbf{GMM}} & {\textbf{Time}} & {\textbf{Ratio}} & {\textbf{Ratio}} \\
+    \textbf{Sim} &  &       &       & {\textbf{Bias}} & \sqrt{MSE} & {\textbf{AvgSE}} & {\textbf{Bias}} & \sqrt{MSE} & {\textbf{AvgSE}} & {\textbf{Taken}} & {\textbf{Var}} & {\textbf{MSE}} \\
+    \hline
+    500   & 100   & 2     & -0.3  & -0.002 & 0.002 & 0.040 & 0.008 & 0.002 & 0.011 & 27.19 & 11.97 & 8.32 \\
+    500   & 100   & 2     & 0     & -0.008 & 0.002 & 0.050 & -0.007 & 0.002 & 0.018 & 27.11 & 8.07  & 7.22 \\
+    500   & 100   & 2     & 0.3   & 0.002 & 0.002 & 0.039 & -0.004 & 0.002 & 0.011 & 27.29 & 12.42 & 11.12 \\
+    500   & 100   & 2     & 0.6   & -0.009 & 0.002 & 0.021 & -0.009 & 0.002 & 0.003 & 28.36 & 43.19 & 5.55 \\
+    500   & 100   & 42    & -0.3  & 0.003 & 0.003 & 0.050 & 0.017 & 0.003 & 0.017 & 30.71 & 8.89  & 4.44 \\
+    500   & 100   & 42    & 0     & -0.007 & 0.003 & 0.061 & -0.006 & 0.002 & 0.025 & 32.28 & 5.86  & 5.63 \\
+    500   & 100   & 42    & 0.3   & 0.002 & 0.003 & 0.048 & -0.012 & 0.003 & 0.016 & 36.03 & 8.58  & 5.64 \\
+    500   & 100   & 42    & 0.6   & -0.018 & 0.003 & 0.028 & -0.025 & 0.003 & 0.005 & 46.06 & 26.97 & 1.69 \\
+    500   & 100   & 500   & -0.3  & 0.001 & 0.008 & 0.377 & -0.059 & 0.009 & 0.075 & 216.15 & 25.39 & 15.74 \\
+    500   & 100   & 500   & 0     & -0.062 & 0.010 & 0.277 & -0.122 & 0.012 & 0.078 & 207.32 & 12.73 & 3.85 \\
+    500   & 100   & 500   & 0.3   & -0.078 & 0.010 & 0.178 & -0.147 & 0.012 & 0.065 & 64.85 & 7.59  & 1.46 \\
+    500   & 100   & 500   & 0.6   & -0.066 & 0.007 & 0.090 & -0.125 & 0.010 & 0.031 & 87.19 & 8.58  & 0.75 \\
+    \hline
+    500   & 250   & 2     & -0.3  & 0.000 & 0.001 & 0.025 & 0.003 & 0.001 & 0.007 & 210.36 & 12.48 & 10.08 \\
+    500   & 250   & 2     & 0     & -0.002 & 0.001 & 0.032 & -0.002 & 0.001 & 0.011 & 210.77 & 8.01  & 7.88 \\
+    500   & 250   & 2     & 0.3   & -0.004 & 0.001 & 0.025 & -0.006 & 0.001 & 0.007 & 206.98 & 12.55 & 7.13 \\
+    500   & 250   & 2     & 0.6   & -0.005 & 0.001 & 0.013 & -0.004 & 0.001 & 0.002 & 206.13 & 45.14 & 8.68 \\
+    500   & 250   & 42    & -0.3  & 0.004 & 0.002 & 0.032 & 0.009 & 0.002 & 0.010 & 193.78 & 9.43  & 5.32 \\
+    500   & 250   & 42    & 0     & 0.002 & 0.002 & 0.039 & 0.002 & 0.001 & 0.016 & 200.59 & 5.86  & 5.80 \\
+    500   & 250   & 42    & 0.3   & -0.007 & 0.002 & 0.031 & -0.012 & 0.002 & 0.010 & 225.64 & 8.81  & 4.05 \\
+    500   & 250   & 42    & 0.6   & -0.005 & 0.002 & 0.017 & -0.008 & 0.002 & 0.003 & 327.96 & 30.39 & 4.04 \\
+    500   & 250   & 500   & -0.3  & -0.004 & 0.006 & 0.169 & -0.097 & 0.007 & 0.033 & 506.60 & 26.74 & 2.73 \\
+    500   & 250   & 500   & 0     & -0.023 & 0.006 & 0.137 & -0.093 & 0.008 & 0.045 & 471.67 & 9.39  & 1.82 \\
+    500   & 250   & 500   & 0.3   & -0.020 & 0.005 & 0.095 & -0.085 & 0.007 & 0.039 & 497.02 & 5.85  & 1.06 \\
+    500   & 250   & 500   & 0.6   & -0.024 & 0.003 & 0.052 & -0.055 & 0.004 & 0.016 & 584.21 & 11.02 & 1.02 \\
+    \hline
+\end{array}\end{matrix}}
+$$
+
+
+
+## Appendix - Hybrid Distributions
+
+Assume that the random variables $Y$ may have both discrete and continuous components. In insurance and many other fields, the term *mixture* is used for distributions with different sub-populations that are combined using latent variables. So, we prefer to refer to this as a *hybrid* combination of discrete and continuous components to avoid confusion with mixture distributions.
+
+For a random variable $Y$, let $y^d$ represent a mass point ($d$ for discrete) and let $y^c$ represent a point of continuity (where the density is positive). Let us now write the likelihood for $Y_j$ and $Y_k$ in terms of the discrete and continuous components.
+
+### Probability Density/Mass Function
+
+Suppose that we wish to evaluate the likelihood at points of continuity, $y_j^c$ and $y_k^c$. This corresponds to the classic case of two random variables with probability density function
+$$
+\begin{array}{ll}
+f_{jk}(y_j^c,y_k^c) &=
+\frac{\partial^2}{\partial y_j^c \partial y_k^c} F_{jk}(y_j^c,y_k^c)
+ = \partial_{12} C \left( F_j(y_j^c),F_k(y_k^c)\right) \\
+&= c\left( F_j(y_j^c),F_k(y_k^c)\right)f_j(y_j^c) f_k(y_k^c) .
+\end{array}
+$$
+Here, $c(\cdot)$ represents the copula density and $f_j, f_k$ are the marginal probability density functions corresponding to $F_j, F_k$. The notation $\partial_{12}$ means taking the partial derivative with respect to the first and second arguments, $y_j$ and $y_k$, respectively.
+
+Suppose that we wish to evaluate the likelihood at points of discreteness $y_j^d$ and $y_k^d$. Then, the joint probability of $Y_j$ and $Y_k$ can be expressed in terms of a copula using the inclusion-exclusion rule
+$$\begin{array}{ll}
+f_{jk}(y_j^d,y_k^d) &=
+\Pr(Y_{j} = y_j^d, Y_{k}=y_k^d)  \\
+&= \Pr(Y_j \le y_j^d, Y_k \le y_k^d) -\Pr(Y_j \le y_j^d-, Y_k \le y_k^d) \\
+& \ \ \ \ \ - \Pr(Y_j \le y_j^d, Y_k \le y_k^d-) +\Pr(Y_j \le y_j^d-, Y_k \le y_k^d-) \\
+&= C \left( F_j(y_j^d),F_k(y_k^d)\right) -C \left( F_j(y_j^d-),F_k(y_k^d)\right) \\
+& \ \ \ \ \ -C \left( F_j(y_j^d),F_k(y_k^d-)\right) +C \left( F_j(y_j^d-),F_k(y_k^d-)\right)  .
+\end{array}
+$$
+The notation $y_k^d-$ means evaluate $y_k^d$ as a left-hand limit. The last expression uses a notation convention assuming that the mass points are on the integers.
+
+Next, suppose that we wish to evaluate the likelihood of $Y_j$ at mass point $y_j^d$ and of $Y_k$ at point of continuity $y_k^c$. Then, the joint distribution function has a hybrid probability density/mass function of the form:
+$$\begin{array}{ll}
+f_{jk}(y_j^d,y_k^c) &=
+\partial_2 \Pr(Y_{j} = y_j^d, Y_{k} \le y_k^c)  \\
+&=\partial_2 \left\{ \Pr(Y_j \le y_j^d, Y_k \le y_k^c) -\Pr(Y_j \le y_j^d-, Y_k \le y_k^c) \right\}\\
+&=\partial_2 \left\{C \left( F_j(y_j^d),F_k(y_k^c)\right) -C \left( F_j(y_j-),F_k(y_k^c)\right) \right\}\\
+&= \left\{C_2 \left( F_j(y_j^d),F_k(y_k^c)\right) -C_2 \left( F_j(y_j^d-),F_k(y_k^c)\right) \right\} f_k(y_k^c) .
+\end{array}
+$$
+Here, $C_2$ represents the partial derivative of the copula $C$ with respect to the second argument.
+
+### Scores - Derivatives of Probability Density/Mass Functions
+
+We define the score function
+\begin{eqnarray}\label{E:Score}
+g_{\theta,ijk}(Y_{ij},Y_{ik}) = \partial_{\theta}  \ln f_{ijk}(Y_{ij},Y_{ik})   .
+\end{eqnarray}
+
+We now evaluate the scores. For two discrete outcomes, the score can be expressed as
+
+$$\begin{array}{cl}
+g_{\theta,ijk}(y_j^d,y_k^d) &= \partial_{\theta}  \ln f_{ijk}(y_j^d,y_k^d) \\
+& = { \frac{\partial_{\theta} \left\{C \left( F_j(y_j^d),F_k(y_k^d)\right) -C \left( F_j(y_j^d-),F_k(y_k^d)\right) -C \left( F_j(y_j^d),F_k(y_k^d-)\right) +C \left( F_j(y_j^d-),F_k(y_k^d-)\right)\right\}}
+{C \left( F_j(y_j^d),F_k(y_k^d)\right) -C \left( F_j(y_j^d-),F_k(y_k^d)\right) -C \left( F_j(y_j^d),F_k(y_k^d-)\right) +C \left( F_j(y_j^d-),F_k(y_k^d-)\right)} }.
+\end{array}$$
+
+
+For a discrete ($y_j^d$) and a continuous $y_k^c$ outcomes, we have
+
+$$\begin{array}{cl}
+g_{\theta,ijk}(y_j^d,y_k^c)
+&= \partial_{\theta}  \ln \left[
+ \left\{C_2 \left( F_j(y_j^d),F_k(y_k^c)\right) -C_2 \left( F_j(y_j^d-),F_k(y_k^c)\right) \right\} f_k(y_k^c) \right] \\
+&= \frac{\partial_{\theta} \left\{ C_2 \left( F_j(y_j^d),F_k(y_k^c)\right) -C_2 \left( F_j(y_j^d-),F_k(y_k^c)\right) \right\}}
+{C_2 \left( F_j(y_j^d),F_k(y_k^c)\right) -C_2 \left( F_j(y_j^d-),F_k(y_k^c)\right)} 
+\end{array}$$
+
+
+For two continuous outcomes, $y_j^c$ and $y_k^c$, we have
+$$
+g_{\theta,ijk}(y_j^c,y_k^c) = \partial_{\theta}  \ln \left[  c(F_{Y_{ij}}(y_j^c), F_{Y_{ik}}(y_k^c)) f_{ij}(y_j^c) f_{ik}(y_k^c) \right] =  \frac{\partial_{\theta}  ~  c(F_{Y_{ij}}(y_j^c), F_{Y_{ik}}(y_k^c))}
+                         { c(F_{Y_{ij}}(y_j^c), F_{Y_{ik}}(y_k^c))} .
+$$
+
+An advantage of restricting ourselves to pairwise distributions is that most of the functions are available from the `R` package `VineCopula`. We use an additional relationship, from Plackett (1954),
+$$
+\frac{\partial }{\partial \rho} C(u_1,u_2) =\phi_2(z_1,z_2) .
+$$
+Here, $\phi_2$ is a bivariate normal probability density function and $z_j = \Phi^{-1}(u_j),$ $j=1,2$ are the normal scores corresponding to residuals $u_j$.
+
+
+
+
+
+

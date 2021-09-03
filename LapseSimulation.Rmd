@@ -1,0 +1,1478 @@
+
+#  Online Supplement 4.  Lapse Simulation
+
+## Background 
+
+This file documents the simulation study of the lapse estimation section of the paper *Joint Models of Insurance Lapsation and Claims*. A **.pdf** version provides a hard copy, the **.html** version allows one to hide `R` code and the **.Rmd** version allows one to run the simulation, changing input parameters as desired. (To run the **.Rmd**, search on **eval=FALSE** and change to **eval=TRUE**.)
+
+
+### Simulation Input Parameters
+
+\scalefont{0.8}
+
+```{r}
+time0 <- Sys.time()  -> time1 # define terms so that we can use to check the run time
+# Input Parameters - These are the parameters coded 
+# Nsamp <-  100       # Number of policyholders
+# rhoLA <- -0.2       # Association between Retention and Type 1 Claims
+# rhoLH <-  0.2       # Association between Retention and Type 2 Claims
+# rhoAH <- 0.1
+# Externalphi1 <- 2   # Tweedie dispersion parameter # With a mean=1000, phi=500 for 94% zeros
+# Externalphi2 <- 2   # phi=2 for near continuous data, phi=42 for data for about half zeros
+# isim <- 1
+#################################
+#  You can change these vectorized versions of the main input parameters
+nSim <- 100
+rhoLAVec <- 0.0#c(-0.2) 
+rhoLHVec <- c(-0.3,0,0.3) #c(0.2) 
+rhoAHVec <- c(-0.3,0, 0.3) #c(0.1)
+Externalphi1Vec <- 42#c(2,42,500)
+Externalphi2Vec <- 42#c(2,42,500)
+NsampVec <- c(2000)
+#rhoLAVec <- c(-0.4, 0, 0.4) ->  rhoLHVec
+# rhoAHVec <- c(0,0.2,0.4)
+# rhoLHVec <- c(-0.4, 0, 0.4)
+# Externalphi1Vec <- c(2,42,500)
+# Externalphi2Vec <- c(2,42,500)
+
+```
+
+\scalefont{1.25}
+
+####R Packages Needed to Run this Simulation 
+
+```{r comment="", message=FALSE, warning=FALSE, eval=FALSE}  
+# Here are the packages that you need to install to run this simulation
+library(tweedie)
+library(reshape)
+library(statmod)
+library(knitr)
+library(BB)
+library(MASS)
+library(copula)
+library(numDeriv)
+library(VineCopula)
+library(mvtnorm)
+
+```
+## Model Specification
+
+### Marginal Outcome Model 
+
+We represent the marginal distributions of the claims random variables using a Tweedie distribution so that the distributions have a mass at zero and are otherwise positive. For each claim variable, we use a logarithmic link to form the mean claims of the form $$\mu_{j,it} = \exp\left(\mathbf{x}_{it}^{\prime} \boldsymbol \beta_j\right), j=1,2 .$$ Thus, the parameters are allowed to differ between auto and homeowners claims. As a consequence of this, you need not use the same variables for each claim type (a zero beta means that the variable is not part of the mean). Each  claim is simulated using the Tweedie distribution, a mean, and two other parameters, $\phi$ (for dispersion) and $P$ (the *power* parameter). 
+
+For the lapse variable, the expected value is of the form $$\pi_{it} = \frac{\exp\left(\mathbf{x}_{it}^{\prime} \boldsymbol \beta_L\right)}{1+\exp\left(\mathbf{x}_{it}^{\prime} \boldsymbol \beta_L\right)},$$ a common form for the logit model.
+
+
+####Marginal Input Parameters 
+
+```{r}  
+# You can change these input parameters (except for the number of time replications 'p')
+p <- 5                 # Number of years # Do not change
+MeanClaim1   <-  5000  # Mean for Type 1 Claims
+MeanClaim2   <- 10000  # Mean for Type 2 Claims
+MeanLapse    <- 0.05   # Mean for Lapse
+Externalxi   <- 1.67   # Tweedie power parameter 
+beta11 <- 0.2;  beta12 <- 2        # Coefficients for Auto
+beta21 <- 0.3;  beta22 <- 3        # Coefficients for Home
+betaL1 <- 2;   betaL2  <- -0.25    # Coefficients for Lapse
+```
+
+#### Rating Variables
+For this simulation study, we have five rating (explanatory) variables:
+
+-  $x_1$, a binary variable that takes on values 1 or 2 depending on whether or not an attribute holds
+
+-  $x_2$, $x_3$, $x_4$, generic continuous explanatory variables
+
+-  $x_5$, time trend ($x_{5it} = t$)
+
+With these values of covariate parameters, the systematic components are
+
+-  auto: $\mathbf{x}_{it}^{\prime} \boldsymbol \beta_1 = \beta_{0,1} +$ `r beta11`  $x_1$ + `r beta12` $x_2$ 
+
+-  home: $\mathbf{x}_{it}^{\prime} \boldsymbol \beta_2 = \beta_{0,2} +$ `r beta21`  $x_3$ + `r beta22` $x_4$ 
+
+-  lapse: $\mathbf{x}_{it}^{\prime} \boldsymbol \beta_L = \beta_{0,L} +$  `r betaL1` $x_2$ +  `r betaL2` $x_5$ .
+
+Intercept parameters are determined using the overall mean terms specified above.
+
+####R Code for Generating Covariates 
+
+\scalefont{0.8}
+
+```{r tidy = TRUE}  
+Generate_Covariates <- function(Nsamp) {
+  x11  <- 1+rbinom(Nsamp, size=1, prob=0.4)              # Time constant Bernoulli variable
+  x1   <- matrix(x11,nrow=Nsamp,ncol=p)
+  x2   <- matrix(1+(runif(p*Nsamp)*2),nrow=Nsamp,ncol=p)
+  x3   <- matrix(1+(runif(p*Nsamp)^2),nrow=Nsamp,ncol=p)
+  x4   <- matrix(1+(runif(p*Nsamp)^2),nrow=Nsamp,ncol=p)
+  mu1a <- exp(beta11*x1+beta12*x2)
+  mu2a <- exp(beta21*x3+beta22*x4)
+  mu1  <- MeanClaim1*mu1a/mean(mu1a)                     # Rescale so that the average claim is MeanClaim1
+  mu2  <- MeanClaim2*mu2a/mean(mu2a) 
+  yearMat    <- t(matrix(rep(1:p,Nsamp),nrow=p,ncol=Nsamp))
+  LapseInter <- log(MeanLapse/(1-MeanLapse)) - mean(betaL1*x2+betaL2*yearMat)  # Set the intercept so that the average lapse is approximately MeanLapse
+  PI_it      <- exp(LapseInter  + betaL1*x2 + betaL2*yearMat)/(1+exp(LapseInter+ betaL1*x2 + betaL2*yearMat)) 
+  PolIDMat   <- t(matrix(rep(1:Nsamp,each=p),nrow=p,ncol=Nsamp))
+  Z <- list(x1,x2,x3,x4,mu1,mu2,yearMat,PI_it,PolIDMat)
+  return(Z)
+}
+
+```
+
+\scalefont{1.25}
+
+### Dependence Model
+
+Dependence among outcome variables is taken to be a Gaussian copula with the following structure
+$$
+\boldsymbol \Sigma  = \left(
+\begin{array}{ccccc}
+1         & \rho_{LA}  & \rho_{LH} \\
+\rho_{LA} & 1          & \rho_{AH} \\
+\rho_{LH} & \rho_{AH}  & 1 \\
+    \end{array}
+\right) .
+$$
+
+####R Code for Simulating Dependent Outcomes 
+
+```{r tidy = TRUE}  
+Generate_SampleData <- function(param,Nsamp,Externalphi1,Externalphi2,Z) {
+  rhoLA <- param[1];  rhoLH <- param[2];  rhoAH_L <- param[3]
+  rhoAH <- rhoLA*rhoLH + rhoAH_L*sqrt( (1-rhoLA^2)*(1-rhoLH^2) )
+  BigSigma <- matrix(c(1,rhoLA,rhoLH,
+                     rhoLA,1,rhoAH,
+                     rhoLH,rhoAH,1),nrow=3,ncol=3)
+  BigSigmaChol <- chol(BigSigma)
+  Z1 <- matrix(rnorm(p*Nsamp*3),nrow=p*Nsamp,ncol=3)%*%BigSigmaChol
+  # Generating Dependent Lapses and Claims
+  UCop <- pnorm(Z1)
+  PI_it <- Z[[8]]
+  PIVec   <-  as.vector(matrix(Z[[8]],nrow=Nsamp*p,ncol=1))
+  mu1Vec  <-  as.vector(matrix(Z[[5]],nrow=Nsamp*p,ncol=1))
+  mu2Vec  <-  as.vector(matrix(Z[[6]],nrow=Nsamp*p,ncol=1))
+  # Simulate Tweedie claims
+  Lapse       <- 1*(UCop[,1] > 1- PIVec)        # high values of U ==> lapse
+  TAvailable  <- matrix(1,nrow=Nsamp,ncol=p)
+  TAvailable1 <- matrix(1-Lapse,nrow=Nsamp,ncol=p)
+  for (icol in 2:p) { TAvailable[,icol]=TAvailable[,icol-1]*TAvailable1[,icol-1]}
+  #TAvailable dictates the number of observed variables
+  Claims1 <- qtweedie(UCop[,2], power=Externalxi, mu=mu1Vec, phi=Externalphi1)
+  Claims2 <- qtweedie(UCop[,3], power=Externalxi, mu=mu2Vec, phi=Externalphi2)
+  SampleDataC <- as.data.frame(cbind(
+     Lapse,Claims1,Claims2,
+     matrix(TAvailable,nrow=Nsamp*p,ncol=1) ,
+     matrix(Z[[7]],nrow=Nsamp*p,ncol=1) ,
+     matrix(Z[[9]],nrow=Nsamp*p,ncol=1) ,
+     matrix(Z[[1]],nrow=Nsamp*p,ncol=1) ,
+     matrix(Z[[2]],nrow=Nsamp*p,ncol=1) ,
+     matrix(Z[[3]],nrow=Nsamp*p,ncol=1) ,
+     matrix(Z[[4]],nrow=Nsamp*p,ncol=1) ,
+     PIVec,mu1Vec,mu2Vec))
+  colnames(SampleDataC) <- c("Lapse","Claims1","Claims2","TAvail", "year","PolID","x1","x2","x3","x4","PI","mu1","mu2")
+  SampleDatC <- SampleDataC[order(SampleDataC$PolID, SampleDataC$year),]
+  SampleData <- subset(SampleDataC, TAvail==1)
+  return(SampleData)
+}
+
+```
+
+
+## Regression Modeling
+
+The Tweedie is commonly used in insurance applications for claims. In part, this is because it can be expressed as a generalized linear model. In the following illustrative code, we have skipped the determination of the $power$ parameter ($P=1.67$ for us). 
+
+####R Code for Regression Estimation 
+
+This code estimates parameters of each marginal distribution. It also calculates the observations transformed to a uniform scale via the probability integral transform.
+
+\scalefont{0.8}
+
+```{r comment="", message=FALSE, warning=TRUE, tidy = TRUE}
+MargRegress <- function(SampleData){
+   SampleData$dfLapse      <- 1-SampleData$PI       
+   # Use this if the logistic regression does not converge
+   # Use this if tweedie 1 regression does not converge
+     dfTweedie1A           <- ptweedie(SampleData$Claims1,xi=Externalxi,mu=SampleData$mu1,phi=Externalphi1)
+     SampleData$dfTweedie1 <- pmin(pmax( 1e-05,dfTweedie1A),.99999)
+   # Use this if tweedie regression 2 does not converge
+     dfTweedie2A           <- ptweedie(SampleData$Claims2,xi=Externalxi,mu=SampleData$mu2,phi=Externalphi2)
+     SampleData$dfTweedie2 <- pmin(pmax( 1e-05,dfTweedie2A),.99999)
+  tryCatch({
+     logistic.fit <- glm(Lapse ~x2+year,data=SampleData,control=glm.control(maxit=100),family=binomial(link=logit))
+     SampleData$dfLapse <- 1-logistic.fit$fitted.values 
+     #*(SampleData$Lapse==0) - not correct but makes the code easier later...
+     },
+     error=function(err) {
+     print(paste("Logistic did not converge:",err))  
+     NonConvergeLogistic <- NonConvergeLogistic+1
+     return(NonConvergeLogistic)
+     })
+   tryCatch({
+     tweedie.fit1 <- glm(Claims1 ~x1+x2,data=SampleData,control=glm.control(maxit=100),family=tweedie(var.power=Externalxi, link.power=0))
+     dfTweedie1A            <- ptweedie(SampleData$Claims1,xi=Externalxi,mu=tweedie.fit1$fitted.values,phi=summary(tweedie.fit1)$dis)
+     SampleData$dfTweedie1  <- pmin(pmax( 1e-05,dfTweedie1A),.99999)
+     },
+     error=function(err) {
+     print(paste("Tweedie1 did not converge:",err))  
+     NonConvergeTweedie1 <- NonConvergeTweedie1+1
+     return(NonConvergeTweedie1)
+     })  
+   tryCatch({
+     tweedie.fit2 <- glm(Claims2 ~x3+x4,data=SampleData,control=glm.control(maxit=100),family=tweedie(var.power=Externalxi, link.power=0))
+     dfTweedie2A            <- ptweedie(SampleData$Claims2,xi=Externalxi,mu=tweedie.fit2$fitted.values,phi=summary(tweedie.fit2)$dis)
+     SampleData$dfTweedie2  <- pmin(pmax( 1e-05,dfTweedie2A),.99999)
+     },
+     error=function(err) {
+     print(paste("Tweedie2 did not converge:",err))  
+     NonConvergeTweedie2 <- NonConvergeTweedie2+1
+     return(NonConvergeTweedie2)
+     })  
+  return(SampleData)
+  }
+
+```
+
+\scalefont{1.25}
+
+####R Code for Data Preparation 
+
+This code separates the data into different subsets needed for likelihood calculations. The subsets include lapse and no lapse, as well as four different claim outcomes: (i) no auto/home claim, (ii) an but no home claim, (iii) no auto but a home claim, and (iv) an auto and a home claim.
+
+\scalefont{0.8}
+
+```{r  tidy = TRUE}
+Create_Data_Subsets <- function(SampleData) {
+  # Reshape the data
+  TweedieLike1 <- SampleData[order(-SampleData$PolID, SampleData$year),]
+  VarsLike    <- c("PolID", "year", "Lapse", "dfLapse", 
+                   "Claims1","dfTweedie1","Claims2","dfTweedie2")
+  TweedieLike <- TweedieLike1[VarsLike]
+  calcOrder   <- 1:length(TweedieLike$PolID)
+# These are the four cases from the hybrid joint mass/density function
+  caset1t2 <- 1*(TweedieLike$Claims1==0)*(TweedieLike$Claims2==0)+
+              2*(TweedieLike$Claims1>0) *(TweedieLike$Claims2==0)+
+              3*(TweedieLike$Claims1==0)*(TweedieLike$Claims2>0)+
+              4*(TweedieLike$Claims1>0) *(TweedieLike$Claims2>0)
+  u  <- as.matrix(cbind(TweedieLike$dfLapse,TweedieLike$dfTweedie1,TweedieLike$dfTweedie2))
+  zu <- qnorm(u)
+  mydata <- data.frame(caset1t2,u,zu,calcOrder,TweedieLike$Lapse)
+  names(mydata) <- c("caset1t2","u1","u2","u3","zu1","zu2","zu3","calcOrder","Lapse")
+  mydataLapse   <- mydata[which(mydata$Lapse==1),]
+  mydataNoLapse <- mydata[which(mydata$Lapse==0),]
+  mydata1 <- mydata[which(caset1t2==1),]
+  mydata2 <- mydata[which(caset1t2==2),]
+  mydata3 <- mydata[which(caset1t2==3),]
+  mydata4 <- mydata[which(caset1t2==4),]
+  totalallmydata <- list(mydataLapse,mydataNoLapse,mydata1,mydata2,mydata3,mydata4,mydata)
+  return(totalallmydata)
+}
+
+```
+
+\scalefont{1.25}
+
+##Joint Model Specification 
+
+### Pairwise Likelihoods
+
+For initial estimation, we first consider the bivariate likelihood between lapse and auto and between lapse and home claims. Consider two random variables where the first is binary (for lapse) and the second may have a Tweedie distribution. The probability density/mass function of the following form
+$$
+f(y_1,y_2) = \left\{
+\begin{array}{lll}
+\Pr(Y_1 =0, Y_2=0) &= C\left(F_1(0),F_2(0) \right)                                                   & \text{for } y_1=0,y_2=0  \\
+\frac{\partial}{\partial y} \Pr(Y_1 = 0, Y_2 \le y)|_{y=y_1} &= C_2\left(F_1(0),F_2(y) \right) f_2(y) & \text{for }y_1=0,y_2>0 \\
+\Pr(Y_1 =1, Y_2=0) &= F_2(0)-C\left(F_1(0),F_2(0) \right)                                          & \text{for }y_1=1,y_2=0  \\
+\frac{\partial}{\partial y} \Pr(Y_1 = 1, Y_2 \le y)|_{y=y_1} &= \{1-C_2\left(F_1(0),F_2(y) \right) \}f_2(y) &\text{for } y_1=1,y_2>0 \\
+\end{array} \right.
+$$
+Pairwise likelihood for auto and home was described in our earlier study of *GMM* estimators without lapse.
+
+####R Code for Pairwise Likelihood Calculation 
+
+In the following pairwise likelihood calculations, we drop the marginal densities $f_2(y)$ as they contain no information about the dependence parameters. See the documentation for the R package `VineCopula` for explanations of the functions to evaluate bivariate copulas and their derivatives.
+
+\scalefont{0.8}
+
+```{r comment="", message=FALSE, warning=TRUE, tidy = TRUE}
+NegBivariateLikelihood <- function(rho,type) {
+    bilikehd <- 0*calcOrder
+    if (nrow(mydataNoLapse)>0) {
+      dat <-  mydataNoLapse
+      u <- (type==1)*dat$u2+(type==2)*dat$u3
+      ClaimInd <- 1*(dat$caset1t2==4)+1*(dat$caset1t2==2)*(type==1)+1*(dat$caset1t2==3)*(type==2)
+      ZeroLike <- as.matrix(BiCopCDF(dat$u1,u, family=1, par=rho),ncol=1)
+      PosLike  <-  as.matrix(BiCopHfunc2(dat$u1,u, family=1, par=rho),ncol=1)
+       bilikehd[dat$calcOrder] <- (ClaimInd==0)*ZeroLike + (ClaimInd>0)*PosLike
+    }
+    if (nrow(mydataLapse)>0) {
+      dat <-  mydataLapse 
+      u <- (type==1)*dat$u2+(type==2)*dat$u3
+      ClaimInd <- 1*(dat$caset1t2==4)+1*(dat$caset1t2==2)*(type==1)+1*(dat$caset1t2==3)*(type==2)
+      ZeroLike <- u-as.matrix(BiCopCDF(dat$u1,u, family=1, par=rho),ncol=1)
+      PosLike  <- 1-as.matrix(BiCopHfunc2(dat$u1,u, family=1, par=rho),ncol=1)      
+      bilikehd[dat$calcOrder] <- (ClaimInd==0)*ZeroLike + (ClaimInd>0)*PosLike
+      }
+    bilikehd[is.na(bilikehd)] <- 0
+    bilikehd <-   pmin(pmax(1e-12,bilikehd),1e12)
+    return(-sum(log(bilikehd)))
+}
+
+BiLikeLA<-function(rho){return(NegBivariateLikelihood(rho,1))}
+BiLikeLH<-function(rho){return(NegBivariateLikelihood(rho,2))}
+
+```
+
+
+```{r comment="", message=FALSE, warning=TRUE, tidy = TRUE}
+BiLikeAH <- function(rho) {
+  # See the VineCopula package for the functions 'BiCopCDF', 'BiCopHfunc', and 'BiCopPDF'
+     likehd <- 0*calcOrder
+  if (nrow(mydata1)>0) {likehd[mydata1$calcOrder] <-
+    BiCopCDF(mydata1$u2,mydata1$u3, family=1, par=rho)
+  }
+  if (nrow(mydata2)>0) {likehd[mydata2$calcOrder] <-
+    BiCopHfunc1(mydata2$u2,mydata2$u3, family=1, par=rho)
+  }
+  if (nrow(mydata3)>0) {likehd[mydata3$calcOrder] <-
+    BiCopHfunc2(mydata3$u2,mydata3$u3, family=1, par=rho)
+  }
+  if (nrow(mydata4)>0) {likehd[mydata4$calcOrder] <- 
+    BiCopPDF(mydata4$u2,mydata4$u3, family=1, par=rho)
+  }
+    likehd <-   pmin(pmax(1e-12,likehd),1e12)
+    return(-sum(log(likehd)))
+}
+
+```
+
+\scalefont{1.25}
+
+### GMM Estimation
+
+Let $\theta$ be a three-dimensional vector that represents the parameters that quantify the association among $\{L_{it}, Y_{1,it}, Y_{2,it} \}.$ Given $T_i=t$, the  hybrid probability density/mass function of $Y_{1,it}$ and $Y_{2,it}$ is $f_{i12,s|t}(\cdot,\cdot)$, as specified in Appendix A.
+
+To estimate $\theta$, for $s \le t$, define the scores
+$$
+g_{\theta,i}(y_1, y_2,T, t) = \mathrm{I}(T=t) ~ \partial_{\theta}  \ln f_{i12,s|t}(y_1, y_2)   .
+$$
+This is a mean zero random variable that contains information about $\theta$. 
+
+In this simulation, the two random variables $Y_1$ and $Y_2$ both follow a Tweedie distribution. The scores have different expressions when (i) no lapse is involved  and when (ii) there is lapse.
+
+##### No Lapse 
+Consider the first case where outcomes are prior to lapse so that $s<t \le m+1$. For two zero outcomes, this can be expressed as
+$$
+ \partial_{\theta}  \ln f_{i12,s|t}(0,0) = \frac{\partial_{\theta} ~ C\left(F_{Lis}(0), F_{1,is}(0), F_{2,is}(0) \right)}
+{C\left(F_{Lis}(0), F_{1,is}(0), F_{2,is}(0) \right)} .
+$$
+For  $s<t \le m+1$ and a single positive outcome, $y>0$, we have
+$$\begin{array}{cl}
+\partial_{\theta}  \ln f_{i12,s|t}(y,0) &=
+ \partial_{\theta}  \ln \left[C_{2}\left(F_{Lis}(0), F_{1,is}(y), F_{2,is}(0) \right) f_{1,is}(y) \right] \\
+&= \frac{\partial_{\theta} C_{2}\left(F_{Lis}(0), F_{1,is}(y), F_{2,is}(0)\right)}{C_{2}\left(F_{Lis}(0), F_{1,is}(y), F_{2,is}(0)\right)}
+\end{array} .
+$$
+
+For  $s<t \le m+1$ and two positive outcomes, $y_1>0$ and $y_2>0$, we have
+$$\begin{array}{cl}
+\partial_{\theta}  \ln f_{i12,s|t}(y_1,y_2) &= \partial_{\theta}  \ln \left[ C_{23}\left(F_{Lis}(0), F_{1,is}(y_{1}), F_{2,it}(y_{2}) \right) \right]\\
+&= \frac{\partial_{\theta}  ~ C_{23}\left(F_{Lis}(0), F_{1,is}(y_{1}), F_{2,is}(y_{2}) \right)}
+                         {C_{23}\left(F_{Lit}(0), F_{1,is}(y_{1}), F_{2,is}(y_{2}) \right)} .
+\end{array}
+$$
+
+#####Lapse
+
+Consider the second case where outcomes occur during the lapse year so that $s=t \le m$. For two zero outcomes, the  score can be expressed as
+$$
+ \partial_{\theta}  \ln f_{i12,s|t}(0,0) = \frac{
+ \sum_{i=0}^1  \left(-1\right)^{i}
+\partial_{\theta} C \left(F_{Lis}(0)^{i}, F_{1,is}(0),F_{2,is}(0)\right)
+  }
+{\sum_{i=0}^1  \left(-1\right)^{i}
+C \left(F_{Lis}(0)^{i}, F_{1,is}(0),F_{2,is}(0)\right)} .
+$$
+For  $s=t \le m$ and a single positive outcome, $y>0$, we have
+$$
+\partial_{\theta}  \ln f_{i12,s|t}(y,0)
+= \frac{\sum_{i=0}^1  \left(-1\right)^{i}
+\partial_{\theta} C_{2}\left(F_{Lis}(0)^{i}, F_{1,is}(y), F_{2,is}(0) \right) }
+{\sum_{i=0}^1  \left(-1\right)^{i}
+C_{2}\left(F_{Lis}(0)^{i}, F_{1,is}(y), F_{2,is}(0) \right) } .
+$$
+In the same way, for  $s=t \le m$ and two positive outcomes, $y_1>0$ and $y_2>0$, we have
+$$
+\partial_{\theta}  \ln f_{i12,s|t}(y_1,y_2) = \frac{\sum_{i=0}^1  \left(-1\right)^{i}
+\partial_{\theta} C_{23}\left(F_{Lis}(0)^{i}, F_{1,is}(y_1), F_{2,is}(y_2) \right)}
+                         {\sum_{i=0}^1  \left(-1\right)^{i}
+C_{23}\left(F_{Lis}(0)^{i}, F_{1,is}(y_1), F_{2,is}(y_2) \right)} .
+$$
+
+
+####Trivariate Gaussian Copula Derivatives with Respect to Association Parameters
+
+To compute the copula and its derivatives we assume a parametric Gaussian copula; this section summarizes results to evaluate the scores using Gaussian copulas. The derivations in Appendix B. Specifically, We evaluate $\frac{\partial}{\partial \rho} C(u_1,u_2,u_3)$ in Appendix B.1, $\frac{\partial}{\partial \rho} C_2(u_1,u_2,u_3)$ in Appendix B.2, and $\frac{\partial}{\partial \rho} C_{23}(u_1,u_2,u_3)$ in Appendix B.3. For simplicity, we use the following generic expression for the association matrix
+$$
+\boldsymbol \Sigma  = \left(
+\begin{array}{ccccc}
+1         & \rho_{12}  & \rho_{13} \\
+\rho_{12} & 1          & \rho_{23} \\
+\rho_{13} & \rho_{23}  & 1 \\
+    \end{array}
+\right) .
+$$
+
+#####No Derivatives 
+First, with uniform random variables $u_j$, we define the normal scores $z_j = \Phi^{-1}(u_j)$. Thus,
+$$\frac{\partial}{\partial \rho_{12}}  C(u_1,u_2,u_3) =
+\phi_2 \left( \left(  \begin{array}{c} z_1 \\ z_2 \end{array} \right); \boldsymbol \Sigma_{11} \right) 
+~ \Phi( z_3^*; \Sigma_{22\cdot 1}),$$
+
+where
+$$
+z_3^* =
+z_3
+-  \boldsymbol \Sigma_{12}^{\prime} \boldsymbol \Sigma_{11}^{-1}
+\left(  \begin{array}{c} z_1 \\ z_2 \end{array} \right), \ \ \
+\boldsymbol \Sigma_{11} = \left(
+\begin{array}{cc}
+1 & \rho_{12}\\
+\rho_{12} &  1
+\end{array}
+\right), 
+\ \ \ \
+\boldsymbol \Sigma_{12} = \left(
+\begin{array}{c}
+\rho_{13}\\
+\rho_{23} \\
+\end{array}
+\right), 
+\ \ \ \
+ \Sigma_{22\cdot 1} = 1
+-  \boldsymbol \Sigma_{12}^{\prime} \boldsymbol \Sigma_{11}^{-1}\boldsymbol \Sigma_{12}  .
+$$
+
+#####One Derivative 
+Second,
+$$\begin{array}{ll}
+&\frac{\partial}{\partial \rho} C_3 \left(u_1, u_2, u_3 \right)=
+h_1^*\left( z_1^*, z_2^*; \rho_x\right)\frac{\partial }{\partial \rho} z_1^*  +  
+h_1^*\left( z_2^*, z_1^*; \rho_x\right)\frac{\partial }{\partial \rho} z_2^*  +  
+\phi_2\left( z_1^*, z_2^*; \rho_x\right)\frac{\partial }{\partial \rho} \rho_x , \\
+\end{array}
+$$
+where $z_1^*= (z_1 - z_3 \rho_{13})/\sigma_1$, $z_2^*= (z_2 - z_3 \rho_{23})/\sigma_2$, $\sigma_1^2 = 1-\rho_{13}^2$, $\sigma_2^2 = 1-\rho_{23}^2$, and $\rho_{X} \sigma_1\sigma_2= \rho_{12} - \rho_{13}\rho_{23}$, and
+$$ h_1^*(x_1,x_2,\rho_{X}) = 
+ \phi\left(x_1\right) \Phi\left(  \frac{x_2 - \rho_{X} x_1  }{ \sqrt{1-\rho_{X}^2}} \right).
+$$
+
+We also need
+$$
+\frac{\partial}{\partial \rho} z_1^* = \frac{\partial }{\partial \rho} \left(\frac{z_1 - \mu_{12 \cdot 3, 1}}{\sigma_1}\right)
+= \frac{\partial }{\partial \rho} \left(\frac{z_1 - z_3 \rho_{13}}{\sqrt{1-\rho_{13}^2}}\right)
+= \left\{\begin{array}{cl}
+0 & \rho = \rho_{12} \\
+\frac{z_1\rho_{13} - z_3 }{(1-\rho_{13}^2)^{3/2}} & \rho = \rho_{13} \\
+0 & \rho = \rho_{23} \\
+\end{array} \right. ,
+$$ 
+
+$$
+\frac{\partial}{\partial \rho} z_2^* = \frac{\partial }{\partial \rho} \left(\frac{z_2 - \mu_{12 \cdot 3, 2}}{\sigma_2}\right)
+= \frac{\partial }{\partial \rho} \left(\frac{z_2 - z_3 \rho_{23}}{\sqrt{1-\rho_{23}^2}}\right)
+= \left\{\begin{array}{cl}
+0 & \rho = \rho_{12} \\
+0 & \rho = \rho_{13} \\
+\frac{z_2\rho_{23} - z_3 }{(1-\rho_{23}^2)^{3/2}} & \rho = \rho_{23} 
+\end{array} \right. ,
+$$ 
+and
+$$
+\frac{\partial}{\partial \rho} \rho_x = \frac{\partial }{\partial \rho} \left(\frac{\rho_{12} - \rho_{13}\rho_{23}}{\sigma_1 \sigma_2}\right)
+= \frac{\partial }{\partial \rho} \left(\frac{\rho_{12} - \rho_{13}\rho_{23}}{(1-\rho_{13}^2)^{1/2} (1-\rho_{23}^2)^{1/2}}\right)
+= \left\{\begin{array}{cl}
+\frac{1}{(1-\rho_{13}^2)^{1/2} (1-\rho_{23}^2)^{1/2}} & \rho = \rho_{12} \\
+\frac{\rho_{12}\rho_{13}-\rho_{23}}{(1-\rho_{13}^2)^{3/2} (1-\rho_{23}^2)^{1/2}} & \rho = \rho_{13} \\
+\frac{\rho_{12}\rho_{23}-\rho_{13}}{(1-\rho_{13}^2)^{1/2} (1-\rho_{23}^2)^{3/2}}& \rho = \rho_{23} 
+\end{array} \right. .
+$$ 
+
+#####Two Derivatives 
+Third, 
+$$
+\frac{\partial}{\partial \rho}  C_{23} \left(u_1, u_2, u_3 \right) =
+\Phi\left( z_1 - \mu_{1 \cdot 23}; \sigma_{1 \cdot 23} \right) \frac{\partial}{\partial \rho} c \left(u_{2}, u_3\right) 
++ \left(\frac{\partial}{\partial \rho} C \left(u_1 | u_{2}, u_3\right)\right) c \left(u_{2}, u_3\right),
+$$
+where
+
+$$
+\begin{array}{ll}
+\frac{\partial}{\partial \rho} C \left(u_1| u_2, u_3\right) =
+- \phi\left( \frac{z_1 - \mu_{1 \cdot 23}} {\sqrt{\sigma_{1 \cdot 23}}}\right)
+\frac{1}{\sigma_{1 \cdot 23}^{3/2}}
+\left(
+ \sigma_{1 \cdot 23} \frac{\partial}{\partial \rho} \mu_{1 \cdot 23} +
+\frac{1}{2}(z_1 - \mu_{1 \cdot 23}) \frac{\partial}{\partial \rho} \sigma_{1 \cdot 23}
+\right) .
+\end{array} 
+$$
+
+We also need $\mu_{1 \cdot 23} = \left(\begin{array}{cc} \rho_{12} & \rho_{13}\end{array}\right) \left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1\end{array}\right)^{-1} \left(\begin{array}{c} z_2  \\ z_3 \end{array}\right)$. With this, we have
+
+$$
+\frac{\partial}{\partial \rho} \mu_{1 \cdot 23}
+= \left\{\begin{array}{cl}
+\left(\begin{array}{cc} 1 & 0 \\ \end{array}\right)
+\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}
+\left(\begin{array}{c} z_2  \\ z_3   \\ \end{array}\right)& \rho = \rho_{12} \\
+\left(\begin{array}{cc} 0 & 1 \\ \end{array}\right)
+\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}
+\left(\begin{array}{c} z_2  \\ z_3   \\ \end{array}\right) & \rho = \rho_{13} \\
+\left(\begin{array}{cc} \rho_{12} & \rho_{13} \\ \end{array}\right)
+\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}
+\left(\begin{array}{cc} 0& 1 \\ 1&0  \\ \end{array}\right)
+\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}
+\left(\begin{array}{c} z_2  \\ z_3   \\ \end{array}\right)& \rho = \rho_{23} 
+\end{array} \right.
+$$ 
+
+Further, with $\sigma_{1 \cdot 23} = 1-\left(\begin{array}{cc} \rho_{12} & \rho_{13} \\  \end{array}\right)\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}\left(\begin{array}{c} \rho_{12} \\ \rho_{13} \\  \end{array}\right)$, we have
+
+$$
+\frac{\partial}{\partial \rho} \sigma_{1 \cdot 23}
+= \left\{\begin{array}{cl}
+- 2
+\left(\begin{array}{cc} 1 &  0 \\ \end{array}\right)
+\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}
+\left(\begin{array}{c} \rho_{12} \\ \rho_{13} \\ \end{array}\right)& \rho = \rho_{12} \\
+- 2
+\left(\begin{array}{cc} 0 &  1 \\ \end{array}\right)
+\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}
+\left(\begin{array}{c} \rho_{12} \\ \rho_{13} \\ \end{array}\right) & \rho = \rho_{13} \\
+-
+\left(\begin{array}{cc} \rho_{12} &  \rho_{13} \\ \end{array}\right)
+\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}
+\left(\begin{array}{cc} 0& 1 \\ 1&0  \\ \end{array}\right)
+\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}
+\left(\begin{array}{c} \rho_{12} \\ \rho_{13} \\ \end{array}\right)& \rho = \rho_{23} 
+\end{array} \right.
+$$ 
+
+Derivatives of the bivariate density $c \left(u_{2}, u_3\right)$  follow directly from results of Schepsmeier and Stober (2012, page 2).
+
+
+####R Code for GMM Functions 
+
+Top level functions are here.
+
+```{r comment="", message=FALSE, warning=TRUE} 
+GMMgthetaFunct<- function(param) {
+   Scores <- data.frame(GMMScore(param)[,c(2:4)]) 
+    names(Scores) <- c("Score12", "Score13", "Score23")
+  return(as.matrix(Scores))
+}
+
+GMMFunc<- function(param) {
+  GMMgtheta <- GMMgthetaFunct(param)
+  GMMScorex <- t(colSums(GMMgtheta)) %*% ginv(Vargtheta) %*% colSums(GMMgtheta) / 
+                 length(GMMgtheta[,1])
+  return(GMMScorex)
+}
+
+```
+
+
+####R Code for GMM Scores 
+
+The likelihood and scores corresponding to all outcomes are calculated here. It uses as input the following subsection that provides calculations only for the trivariate piece. The function returns the likelihood and three scores (corresponding to the three association parameters).
+
+\scalefont{0.8}
+
+```{r tidy = TRUE}
+GMMScore <- function(param) {
+  rhoLA <- param[1];  rhoLH <- param[2];  rhoAH_L <- param[3]
+# Transformed parameter
+  rhoAH <- rhoLA*rhoLH + rhoAH_L*sqrt( (1-rhoLA^2)*(1-rhoLH^2) )
+  rhoLA <- pmin(pmax(-.99,rhoLA),.99)
+  rhoLH <- pmin(pmax(-.99,rhoLH),.99)
+  rhoAH <- pmin(pmax(-.99,rhoAH),.99)
+  SigmaList <- SigmaFct(rhoLA,rhoLH,rhoAH);Sigma <- SigmaList[[1]]
+  Sigma12   <- SigmaList[[2]];Sigma13   <- SigmaList[[3]];Sigma23   <- SigmaList[[4]]
+  Sigma13.2 <- SigmaList[[5]];Sigma12.3 <- SigmaList[[6]];Sigma23.1 <- SigmaList[[7]]
+  Sigma3.12 <- SigmaList[[8]];Sigma1.23 <- SigmaList[[9]];Sigma2.13 <- SigmaList[[10]]
+
+  vec111 <- as.vector(cbind(1,1,1));vec001 <- as.vector(cbind(0,0,1))
+  ScoreLike <- matrix(0,length(mydata[,1]),4)
+# (Auto=0,Home=0) Case
+  if (nrow(mydata1)>0) {
+    dat <- mydata1
+    Reten0 <- 1-dat$Lapse
+    score <- GMMScore00(rhoLA,rhoLH,rhoAH,dat$u1,dat$u2,dat$u3)
+    fbb <- score[,2:4]
+    Fbb <- as.matrix(score[,1],ncol=1)            %*% vec111
+    Fbb[,1] <- pmax(1e-05,Fbb[,1]);Fbb[,2] <- pmax(1e-05,Fbb[,2]); Fbb[,3] <- pmax(1e-05,Fbb[,3])  
+    faa <- as.matrix(dmvnorm(cbind(dat$zu2,dat$zu3), mean=rep(0, 2), sigma=Sigma23, log=FALSE),ncol=1) %*% vec001
+    Faa <- as.matrix(BiCopCDF(dat$u2,dat$u3, family=1, par=rhoAH),ncol=1)                              %*% vec111
+    Faa_Fbb <- pmin(pmax(1e-05,(Faa-Fbb)[,1]),0.99999)
+    ScoreLike[dat$calcOrder,1]   <- Reten0*log(Fbb)[,1] + (1-Reten0)*log(Faa_Fbb)   
+    ScoreLike[dat$calcOrder,2:4] <- Reten0*fbb/Fbb      + (1-Reten0)*(faa-fbb)/Faa_Fbb
+  }
+  # (Auto=1,Home=0) Case
+  if (nrow(mydata2)>0) {
+    dat <- mydata2
+    Reten0 <- 1-dat$Lapse
+    score <- GMMScore10(rhoLA,rhoLH,rhoAH,dat$u1,dat$u2,dat$u3)
+    fbb <- score[,2:4]
+    Fbb <- as.matrix(score[,1],ncol=1) %*% vec111 
+    Fbb[,1] <- pmax(1e-05,Fbb[,1]);Fbb[,2] <- pmax(1e-05,Fbb[,2]); Fbb[,3] <- pmax(1e-05,Fbb[,3])  
+    faa <- as.matrix(BiCopHfuncDeriv(dat$u3,dat$u2, family=1, par=rhoAH),ncol=1)            %*% vec001
+    Faa <- as.matrix(BiCopHfunc1(dat$u2,dat$u3, family=1, par=rhoAH),ncol=1)                %*% vec111
+    Faa_Fbb <- pmin(pmax(1e-05,(Faa-Fbb)[,1]),0.99999)
+    ScoreLike[dat$calcOrder,1]   <- Reten0*log(Fbb)[,1] + (1-Reten0)*log(Faa_Fbb)  
+    ScoreLike[dat$calcOrder,2:4] <- Reten0*fbb/Fbb      + (1-Reten0)*(faa-fbb)/Faa_Fbb
+  }
+  # (Auto=0,Home=1) Case
+  if (nrow(mydata3)>0) {
+    dat <- mydata3
+    Reten0 <- 1-dat$Lapse
+    score <- GMMScore01(rhoLA,rhoLH,rhoAH,dat$u1,dat$u2,dat$u3)
+    fbb <- score[,2:4]
+    Fbb <- as.matrix(score[,1],ncol=1) %*% vec111
+    Fbb[,1] <- pmax(1e-05,Fbb[,1]);Fbb[,2] <- pmax(1e-05,Fbb[,2]); Fbb[,3] <- pmax(1e-05,Fbb[,3])  
+    faa <- as.matrix(BiCopHfuncDeriv(dat$u2,dat$u3, family=1, par=rhoAH),ncol=1)            %*% vec001
+    Faa <- as.matrix(BiCopHfunc2(dat$u2,dat$u3, family=1, par=rhoAH),ncol=1)                 %*% vec111
+    Faa_Fbb <- pmin(pmax(1e-05,(Faa-Fbb)[,1]),0.99999)
+    ScoreLike[dat$calcOrder,1]   <- Reten0*log(Fbb)[,1] + (1-Reten0)*log(Faa_Fbb)   
+    ScoreLike[dat$calcOrder,2:4] <- Reten0*fbb/Fbb      + (1-Reten0)*(faa-fbb)/Faa_Fbb
+  }
+  # (Auto=1,Home=1) Case
+  if (nrow(mydata4)>0) {
+    dat <- mydata4
+    Reten0 <- 1-dat$Lapse
+    score <- GMMScore11(rhoLA,rhoLH,rhoAH,dat$u1,dat$u2,dat$u3)
+    fbb <- score[,2:4]
+    Fbb <- as.matrix(score[,1],ncol=1) %*% vec111 
+    Fbb[,1] <- pmax(1e-05,Fbb[,1]);Fbb[,2] <- pmax(1e-05,Fbb[,2]); Fbb[,3] <- pmax(1e-05,Fbb[,3])  
+    faa <- as.matrix(BiCopDeriv(pnorm(dat$zu2),pnorm(dat$zu3), family=1, par=rhoAH),ncol=1) %*% vec001
+    Faa <- as.matrix(BiCopPDF(dat$u2,dat$u3, family=1, par=rhoAH),ncol=1)                   %*% vec111
+    Faa_Fbb <- pmin(pmax(1e-05,(Faa-Fbb)[,1]),0.99999)
+    ScoreLike[dat$calcOrder,1] <-   Reten0*log(Fbb)[,1] + (1-Reten0)*log(Faa_Fbb)  
+    ScoreLike[dat$calcOrder,2:4] <- Reten0*fbb/Fbb      + (1-Reten0)*(faa-fbb)/Faa_Fbb
+  }
+  return(ScoreLike)
+}
+
+```
+
+\scalefont{1.25}
+
+
+####R Code for Basic GMM Score Functions 
+
+The likelihood and scores corresponding to trivariate outcomes are calculated here. This has four functions corresponding to our four data cases: (i) (Auto=0,Home=0), (ii) (Auto=1,Home=0), (iii) (Auto=0,Home=1), and (iv) (Auto=1,Home=1). Each function returns the likelihood and three scores (corresponding to the three association parameters).
+
+\scalefont{0.8}
+
+```{r tidy = TRUE}
+# (Auto=0,Home=0) Case
+GMMScore00 <- function(rho12,rho13,rho23,u1,u2,u3){
+  norm.cops  <- normalCopula(param=c(rho12,rho13,rho23), dispstr="un", dim=3)
+  like <- pCopula(cbind(u1,u2,u3), copula=norm.cops, algorithm=TVPACK(abseps=1e-8))
+  like <- pmin(pmax(1e-05,like),.99999)
+
+  zu1 <- as.vector(qnorm(u1));zu2 <- as.vector(qnorm(u2));zu3 <- as.vector(qnorm(u3))
+  SigmaList <- SigmaFct(rho12,rho13,rho23);Sigma <- SigmaList[[1]]
+  Sigma12   <- SigmaList[[2]];Sigma13 <- SigmaList[[3]];Sigma23 <- SigmaList[[4]];
+  Sigma3.12 <- SigmaList[[8]];Sigma1.23 <- SigmaList[[9]];Sigma2.13 <- SigmaList[[10]]
+  
+  zstar12 <- zu3 - as.matrix(cbind(zu1,zu2))%*%ginv(Sigma12)%*%Sigma[c(1,2),3]
+  score12 <- dmvnorm(cbind(zu1,zu2),mean=rep(0,2),sigma=Sigma12,log=FALSE) * pnorm(zstar12, sd=sqrt(Sigma3.12))
+  zstar13 <- zu2 - as.matrix(cbind(zu1,zu3))%*%ginv(Sigma13)%*%Sigma[c(1,3),2]
+  score13 <- dmvnorm(cbind(zu1,zu3),mean=rep(0,2),sigma=Sigma13,log=FALSE) * pnorm(zstar13,sd=sqrt(Sigma2.13))
+  zstar23 <- zu1 - as.matrix(cbind(zu2,zu3))%*%ginv(Sigma23)%*%Sigma[c(2,3),1]
+  score23 <- dmvnorm(cbind(zu2,zu3),mean=rep(0,2),sigma=Sigma23,log=FALSE) * pnorm(zstar23,sd=sqrt(Sigma1.23))
+  return(cbind(like,score12,score13,score23)) 
+  }
+
+# (Auto=1,Home=0) Case
+GMMScore10 <- function(rho12,rho13,rho23,u1,u2,u3){
+  zu1 <- as.vector(qnorm(u1));zu2 <- as.vector(qnorm(u2));zu3 <- as.vector(qnorm(u3))
+  sig1 <- sqrt(1-rho12^2)
+  sig2 <- sqrt(1-rho23^2)
+  rhox <- (rho13-rho12*rho23)/(sig1*sig2)
+  rhox <- pmin(pmax(-.999,rhox),.999)
+  z1s  <- (zu1 -zu2*rho12)/sig1
+  z3s  <- (zu3 -zu2*rho23)/sig2
+  like <- BiCopCDF(pnorm(z1s),pnorm(z3s), family=1, par=rhox)  
+  like <- pmin(pmax(1e-05,like),.99999)
+  
+  rhoxMat <- matrix(c(1,rhox,rhox,1),nrow=2,ncol=2)
+  scoreAiii <- dmvnorm(cbind(z1s,z3s),mean=rep(0,2),sigma=rhoxMat,log=FALSE)
+  score13 <- 0  + 0 + scoreAiii/(sig1*sig2)
+  score12 <- bideriv1(z1s,z3s,rhox)*(zu1*rho12-zu2)/sig1^3  + 0 + scoreAiii*(rho12*rho13-rho23)/(sig1^3*sig2)
+  score23 <- 0  + bideriv1(z3s,z1s,rhox)*(zu3*rho23-zu2)/sig2^3 + scoreAiii*(rho13*rho23-rho12)/(sig1*sig2^3)
+  return(cbind(like,score12,score13,score23)) 
+  }
+# Helpful Function
+bideriv1 <- function(x1,x2,rhox){return(dnorm(x1)*pnorm((x2-rhox*x1)/sqrt(1-rhox^2))) }
+# (Auto=0,Home=1) Case
+GMMScore01 <- function(rho12,rho13,rho23,u1,u2,u3){
+  zu1 <- as.vector(qnorm(u1));zu2 <- as.vector(qnorm(u2));zu3 <- as.vector(qnorm(u3))
+  sig1 <- sqrt(1-rho13^2)
+  sig2 <- sqrt(1-rho23^2)
+  rhox <- (rho12-rho13*rho23)/(sig1*sig2)
+  rhox <- pmin(pmax(-.999,rhox),.999)
+  z1s  <- (zu1 -zu3*rho13)/sig1
+  z2s  <- (zu2 -zu3*rho23)/sig2
+  like <- BiCopCDF(pnorm(z1s),pnorm(z2s),family=1,par=rhox)  
+  like <- pmin(pmax(1e-05,like),.99999)
+  
+  rhoxMat   <-  matrix(c(1,rhox,rhox,1),nrow=2,ncol=2)
+  scoreAiii <- dmvnorm(cbind(z1s,z2s), mean=rep(0, 2), sigma=rhoxMat, log=FALSE)
+  score12   <- 0  + 0 + scoreAiii/(sig1*sig2)
+  score13   <- bideriv1(z1s,z2s,rhox)*(zu1*rho13-zu3)/sig1^3  + 0 + scoreAiii*(rho12*rho13-rho23)/(sig1^3*sig2)
+  score23   <- 0  + bideriv1(z2s,z1s,rhox)*(zu2*rho23-zu3)/sig2^3 + scoreAiii*(rho12*rho23-rho13)/(sig1*sig2^3)
+  return(cbind(like,score12,score13,score23)) 
+  }  
+# (Auto=1,Home=1) Case
+GMMScore11 <- function(rho12,rho13,rho23,u1,u2,u3){
+  zu1 <- as.vector(qnorm(u1));zu2 <- as.vector(qnorm(u2));zu3 <- as.vector(qnorm(u3))
+  SigmaList <- SigmaFct(rho12,rho13,rho23);Sigma <- SigmaList[[1]]
+  Sigma12   <- SigmaList[[2]];Sigma13 <- SigmaList[[3]];Sigma23 <- SigmaList[[4]];
+  Sigma13.2 <- SigmaList[[5]];Sigma12.3 <- SigmaList[[6]];Sigma23.1 <- SigmaList[[7]];
+  Sigma3.12 <- SigmaList[[8]];Sigma1.23 <- as.numeric(SigmaList[[9]]);Sigma2.13 <- SigmaList[[10]]
+  tempSig   <- ginv(Sigma[2:3,2:3])
+  mu1.23    <- cbind(zu2,zu3) %*% tempSig %*% Sigma[1,2:3]
+  z1s  <- (zu1 - as.vector(mu1.23))/as.numeric(sqrt(Sigma1.23))
+  like <- pnorm(z1s)*BiCopPDF(u2,u3, family=1, par=rho23)
+  like <- pmax(1e-05,like)
+  
+  partialCop1 <- -dnorm(z1s)/Sigma1.23^(3/2)
+  mu1.231 <- as.vector(cbind(zu2,zu3) %*% tempSig %*% as.vector(c(1,0)))
+  mu1.232 <- as.vector(cbind(zu2,zu3) %*% tempSig %*% as.vector(c(0,1)))
+  mu1.233 <- -as.vector(cbind(zu2,zu3) %*% tempSig %*% matrix(c(0,1,1,0),nrow=2,ncol=2) %*% tempSig %*% Sigma[1,2:3])
+  
+  sig1.231 <- as.numeric(-2*Sigma[2:3,1] %*% tempSig %*% as.vector(c(1,0)))
+  sig1.232 <- as.numeric(-2*Sigma[2:3,1] %*% tempSig %*% as.vector(c(0,1)))
+  sig1.233 <- as.numeric(Sigma[2:3,1] %*% tempSig %*% matrix(c(0,1,1,0),nrow=2,ncol=2) %*% tempSig %*% Sigma[1,2:3])
+  
+  partialCop12 <- partialCop1*(Sigma1.23*mu1.231+0.5*(zu1-mu1.23)*sig1.231)
+  partialCop13 <- partialCop1*(Sigma1.23*mu1.232+0.5*(zu1-mu1.23)*sig1.232)
+  partialCop23 <- partialCop1*(Sigma1.23*mu1.233+0.5*(zu1-mu1.23)*sig1.233)
+  
+  score12 <- 0  + partialCop12*BiCopPDF(u2,u3, family=1, par=rho23)
+  score13 <- 0  + partialCop13*BiCopPDF(u2,u3, family=1, par=rho23)                
+  score23 <- pnorm(z1s)*BiCopDeriv(u2,u3,family=1,par=rho23,deriv="par",log=FALSE) +
+              partialCop23*BiCopPDF(u2,u3, family=1, par=rho23) 
+  return(cbind(like,score12,score13,score23)) 
+  }
+
+```
+
+\scalefont{1.25}
+
+
+####R Code for Matrices of Association Parameters 
+
+This function helps to organize the association parameters used througout.
+
+```{r tidy = TRUE}
+SigmaFct <- function(rho12,rho13,rho23){
+  Sigma <- matrix(c(1,rho12,rho13,  rho12,1,rho23, rho13,rho23,1),nrow=3,ncol=3)
+  Sigma12   <- Sigma[c(1,2),c(1,2)]
+  Sigma13   <- Sigma[c(1,3),c(1,3)]
+  Sigma23   <- Sigma[c(2,3),c(2,3)]
+  Sigma13.2 <- Sigma[c(1,3),c(1,3)]-Sigma[c(1,3),2] %*% t(Sigma[c(1,3),2]) 
+  Sigma12.3 <- Sigma[c(1,2),c(1,2)]-Sigma[c(1,2),3] %*% t(Sigma[c(1,2),3])  
+  Sigma23.1 <- Sigma[c(2,3),c(2,3)]-Sigma[c(2,3),1] %*% t(Sigma[c(2,3),1])
+  Sigma3.12 <- 1-Sigma[3,1:2] %*% ginv(Sigma[1:2,1:2]) %*% Sigma[3,1:2]
+  Sigma1.23 <- 1-Sigma[1,2:3] %*% ginv(Sigma[2:3,2:3]) %*% Sigma[1,2:3]
+  Sigma2.13 <- 1-Sigma[2,c(1,3)] %*% ginv(Sigma[c(1,3),c(1,3)]) %*% Sigma[2,c(1,3)]
+  Sigma3.12 <- Sigma3.12*(Sigma3.12>0)
+  Sigma1.23 <- Sigma1.23*(Sigma1.23>0)
+  Sigma2.13 <- Sigma2.13*(Sigma2.13>0)
+  list(Sigma,Sigma12,Sigma13,Sigma23,Sigma13.2,Sigma12.3,Sigma23.1,Sigma3.12,Sigma1.23,Sigma2.13)
+  }
+```
+
+\scalefont{0.8}
+
+###R Code for Simulation Loop 
+
+```{r comment="", eval=FALSE, tidy = TRUE}
+time1 <- Sys.time()
+set.seed(123457)
+NonConvergeTweedie1 <- 0 -> NonConvergeTweedie2
+NumRuns <- length(rhoLAVec)*length(rhoLHVec)*length(rhoAHVec)*length(Externalphi1Vec)*length(NsampVec)  # same phis
+OverResults <- matrix(0,nrow=NumRuns,ncol=26)
+colnames(OverResults) <- c("NumSim","NumSamp","phi1","phi2","rhoLA","rhoLH","rhoAH",
+                           "PairBiasLA","PairBiasLH","PairBiasAH","PairLASqRootMSE","PairLHSqRootMSE","PairLHSqRootMSE","PairLAAvgSD","PairLHAvgSD","PairAHAvgSD",
+                           "GMMBiasLA","GMMBiasLH","GMMBiasAH","GMMLASqRootMSE","GMMLHSqRootMSE","GMMAHSqRootMSE","GMMLAAvgSE","GMMLHAvgSE","GMMAHAvgSE","RunTime")
+ResultsSim <- matrix(0,nrow=nSim,ncol=12)
+set.seed(123457)
+iResultCount <- 0
+
+for (iNsamp in 1:length(NsampVec)) {
+for (iExternalphi1 in 1:length(Externalphi1Vec)) {
+#for (iExternalphi2 in 1:length(Externalphi2Vec)) {
+for (irhoLA in 1:length(rhoLAVec)) {
+for (irhoLH in 1:length(rhoLHVec)) {
+for (irhoAH in 1:length(rhoAHVec)) {
+      iResultCount <- iResultCount + 1
+  OverResults[iResultCount,1] <- nSim
+  OverResults[iResultCount,2] <- NsampVec[iNsamp] -> Nsamp
+  OverResults[iResultCount,3] <- Externalphi1Vec[iExternalphi1] ->  Externalphi1        
+  #OverResults[iResultCount,4] <- Externalphi2Vec[iExternalphi2] ->  Externalphi2     
+  OverResults[iResultCount,4] <- Externalphi1Vec[iExternalphi1] ->  Externalphi2      #same phisss
+  OverResults[iResultCount,5] <- rhoLAVec[irhoLA] ->  rhoLA  
+  OverResults[iResultCount,6] <- rhoLHVec[irhoLH] ->  rhoLH  
+  OverResults[iResultCount,7] <- rhoAHVec[irhoAH] ->  rhoAH    
+  
+# Use Conditional/partial correlation for optimization  
+rhoAH_L <- (rhoAH -  rhoLA*rhoLH)/sqrt( (1-rhoLA^2)*(1-rhoLH^2) )  
+trueparam <- c(rhoLA,rhoLH,rhoAH_L)
+trueparamOriginal <- c(rhoLA,rhoLH,rhoAH)
+#################################################
+#  Start Simulation Loop    
+for (iSim in 1:nSim) {
+  #  Generate Covariates
+  Z <- Generate_Covariates(Nsamp)
+  #  Generate Data
+  SampleData <- Generate_SampleData(param=trueparam,Nsamp=Nsamp,Externalphi1,Externalphi2,Z)
+  #  Fit Regression
+  SampleData <- MargRegress(SampleData)
+  # Reshape the data
+  SampleData     <- SampleData[order(-SampleData$PolID, SampleData$year),]
+  calcOrder      <- 1:(length(SampleData$PolID)/p)
+  totalallmydata <- Create_Data_Subsets(SampleData)
+  mydataLapse    <- totalallmydata[[1]]
+  mydataNoLapse  <- totalallmydata[[2]]
+  mydata1        <- totalallmydata[[3]]
+  mydata2        <- totalallmydata[[4]]
+  mydata3        <- totalallmydata[[5]]
+  mydata4        <- totalallmydata[[6]]
+  mydata         <- totalallmydata[[7]]
+  #########################
+  # Pairwise First - For Starting Values
+  toler     <- 0.25#0.4
+  trueparam <- c(rhoLA,rhoLH,rhoAH_L)
+  lbound    <- trueparam -toler*c(1,1,.4); lbound <- pmax(-.8, lbound)
+  ubound    <- trueparam +toler*c(1,1,.4); ubound <- pmin(0.8, ubound)
+  opLA <- optim(0,BiLikeLA,method=c("L-BFGS-B"),lower=lbound[1],upper=ubound[1],hessian=TRUE)
+  tryCatch(PairSELA <- sqrt(diag(ginv(opLA$hessian))), error=function(e) {PairSELA <- 0})
+  opLH <- optim(0,BiLikeLH,method=c("L-BFGS-B"),lower=lbound[2],upper=ubound[2],hessian=TRUE)
+  tryCatch(PairSELH <- sqrt(diag(ginv(opLH$hessian))), error=function(e) {PairSELH <- 0})
+  opAH <- optim(0,BiLikeAH,method=c("L-BFGS-B"),lower=lbound[3],upper=ubound[3],hessian=TRUE)
+  tryCatch(PairSEAH <- sqrt(diag(ginv(opAH$hessian))), error=function(e) {PairSEAH <- 0})
+  ResultsSim[iSim,1:3] <- rbind(opLA$par,opLH$par,opAH$par)
+  ResultsSim[iSim,4:6] <- rbind(PairSELA,PairSELH,PairSEAH)
+  ######################### 
+  # GMM parameter estimate
+  GMMInit       <- c(opLA$par,opLH$par,opAH$par)
+  GMMgthetaInit <- GMMgthetaFunct(GMMInit)
+  GMMInitdev <- GMMgthetaInit - matrix(1, nrow=length(GMMgthetaInit[,1]),ncol=1) %*%  colMeans(GMMgthetaInit)
+  Vargtheta  <- t(GMMInitdev) %*% GMMInitdev / length(GMMgthetaInit[,1])
+  GMMResult2 <- optim(par=GMMInit,GMMFunc,method=c("L-BFGS-B"),lower=lbound,upper=ubound,control=list(factr=10^12))
+  GMMEst     <- GMMResult2$par  
+  # Standard Error
+  # Adjustments for Reparameterization
+  GTransform <- matrix(c(1,0,0,0,1,0,
+                      GMMEst[2]-GMMEst[1]*GMMEst[3]*sqrt( (1-GMMEst[2]^2)/(1-GMMEst[1]^2) )  ,
+                      GMMEst[1]-GMMEst[2]*GMMEst[3]*sqrt( (1-GMMEst[1]^2)/(1-GMMEst[2]^2) )  ,
+                      sqrt( (1-GMMEst[1]^2)*(1-GMMEst[2]^2) ) ) ,
+                      nrow=3,ncol=3)
+  GMMgthetaSumFunct<- function(param) { colSums(GMMgthetaFunct(param))  }
+  gradient   <- jacobian(func=GMMgthetaSumFunct,GMMEst, method="simple",method.args=list(eps=5e-3))
+  GMMgtheta  <- GMMgthetaFunct(GMMEst)
+  Vargtheta  <- t(GMMgtheta) %*% GMMgtheta / length(GMMgtheta[,1])
+  GMMVar     <- t(gradient) %*% ginv(Vargtheta) %*% gradient / length(GMMgtheta[,1])
+  TransformGMMVar <- t(GTransform) %*% ginv(GMMVar) %*% GTransform
+  tryCatch(GMMstderror <- sqrt(diag(TransformGMMVar)) , error=function(e) {GMMstderror <- 0*TransformGMMVar})
+  GMMstderror -> ResultsSim[iSim,10:12]
+  GMMEst[3] <- GMMEst[1]*GMMEst[2] + GMMEst[3]*sqrt( (1-GMMEst[1]^2)*(1-GMMEst[2]^2) ) 
+  ResultsSim[iSim,7:9]  <- GMMEst
+}
+# This finishes the simulation loop
+
+#########################
+#round(ResultsSim,digits=3)
+ResultsSim[is.na(ResultsSim)] <- 0
+AverResults <- colMeans(ResultsSim)
+VarResults <-  colMeans(ResultsSim*ResultsSim) - (colMeans(ResultsSim))^2 
+
+OverResults[iResultCount,8:10] <-   AverResults[1:3] - trueparamOriginal[c(1,2,3)] 
+OverResults[iResultCount,11:13] <- sqrt(VarResults[1:3] + OverResults[iResultCount,8:10]^2)
+OverResults[iResultCount,14:16] <- AverResults[4:6]
+OverResults[iResultCount,17:19] <- AverResults[7:9] - trueparamOriginal
+OverResults[iResultCount,20:22] <- sqrt(VarResults[7:9] + OverResults[iResultCount,17:19]^2)
+OverResults[iResultCount,23:25] <- AverResults[10:12]
+OverResults[iResultCount,26] <- Sys.time()  - time1
+time1 <- Sys.time();
+} 
+write.csv(OverResults,"LapseGMMSim01May2018_2000B.csv",row.names=F)
+  }}}}#}
+round(OverResults,digits=4)
+
+NonConvergeTweedie1
+NonConvergeTweedie2
+```
+
+\scalefont{1.25}
+
+## Simulation Results
+
+### Effects of Sample Size and Dispersion Parameters
+
+The following table shows the performance of the *GMM* lapse estimator by varying the sample size and dispersion parameters, $\phi_1$ (for auto), and $\phi_2$ (for home). For this table, we used $\rho_{LA} = -0.2$, $\rho_{LH} = 0.2$, and $\rho_{AH} = 0.1$ for the association parameters, these being comparable to the results of our empirical work. Further, we use $\phi_1=\phi_2$ for simplicity. For smaller samples, $n=100, 250$, we used 500 simulations to make sure that the bias was being determined appropriately. This was less of a concern with larger sample sizes, $n=500,1000, 2000$, and so for convenience we used 100 simulations in this study. 
+
+Some aspects of the results are consistent with our *GMM* study (without lapse). As the dispersion parameters $\phi$ increase, there are more discrete observations resulting in larger biases and standard errors for all sample sizes. The magnitude of biases suggest that our general procedure may not be suitable for sample sizes as small as $n=100$. However, even for $n=250$ (and above), we deem their performance acceptable on the bias criterion. 
+
+In contrast, for the standard error criterion, we view the smaller sample sizes $n=100,250$ as unacceptable. For example, if $n=100$, $\phi_1=\phi_2=500$, and $\rho_{LA} = -0.2$, it is hard to imagine recommending a procedure where the average standard error is 0.158. Only for nearly continuous data, when $\phi_1=\phi_2=2$, do the standard errors seem desirable with $n=500$. In general, for more discrete data where $\phi_1=\phi_2=500$, we recommend samples sizes of $n=2,000$ and more. Most users that we work with are primarily interested in point estimates but also want to say something about statistical significance; reliable standard errors are important.
+
+We use the pairwise estimators as starting values in the more complete *GMM* estimators. In this application, we had few scores available and so it is not surprising that the *GMM* estimators are close to thie pairwise starting values, meaning that the biases are largely equivalent. 
+Interestingly, in almost every case, the standard errors of the pairs are slightly larger than the corresponding *GMM* estimators. The exception occurs for $n=1000$, $\phi_1=\phi_2=500$ for the **AH** pair. Given the consistency of results for other cases, this may be simply due to simulation error.
+
+
+
+$${\tiny \begin{matrix}
+\begin{array}{ccc|rrr|rrr|rrr|rrr|r}\hline
+\textbf{ Num} &  \textbf{ Num} & \phi_1 & 
+\textbf{ Pair} &  \textbf{Bias}  &       & 
+\textbf{ Pair} & \textbf{ Std}    &   \textbf{Err} & 
+\textbf{ GMM} &   \textbf{Bias}    &      & 
+\textbf{ GMM} &   \textbf{ Std}    &   \textbf{Err}   & 
+\textbf{ Time} \\
+ \textbf{ Sim} & \textbf{ Samp} & \phi_2 &   
+ \textbf{ LA} &   \textbf{ LH} &   \textbf{ AH} &
+ \textbf{ LA} &   \textbf{ LH} &   \textbf{ AH} & 
+ \textbf{ LA} &   \textbf{ LH} &   \textbf{ AH} &
+ \textbf{ LA} &   \textbf{ LH} &   \textbf{ AH} &
+\textbf{ Taken} \\ \hline
+       500 &        100 &          2 &     -0.004 &      0.008 &      0.003 &      0.095 &      0.094 &      0.049 &     -0.004 &      0.007 &     -0.001 &      0.092 &      0.091 &      0.049 &       1.28 \\
+       500 &        100 &         42 &     -0.006 &     -0.011 &      0.004 &      0.098 &      0.096 &      0.053 &     -0.006 &     -0.011 &     -0.001 &      0.096 &      0.094 &      0.053 &       1.04 \\
+       500 &        100 &        500 &     -0.035 &     -0.013 &      0.014 &      0.187 &      0.144 &      0.136 &     -0.037 &     -0.010 &     -0.015 &      0.158 &      0.141 &      0.132 &       1.34 \\\hline
+       500 &        250 &          2 &     -0.002 &      0.001 &      0.000 &      0.059 &      0.059 &      0.031 &     -0.002 &      0.000 &      0.000 &      0.059 &      0.058 &      0.031 &       3.20 \\
+       500 &        250 &         42 &      0.005 &      0.002 &      0.000 &      0.063 &      0.061 &      0.034 &      0.005 &      0.002 &      0.000 &      0.062 &      0.060 &      0.034 &       2.58 \\
+       500 &        250 &        500 &     -0.018 &     -0.016 &      0.012 &      0.111 &      0.091 &      0.086 &     -0.019 &     -0.016 &     -0.002 &      0.108 &      0.090 &      0.086 &       3.54 \\\hline
+       100 &        500 &          2 &     -0.002 &      0.001 &     -0.002 &      0.042 &      0.042 &      0.022 &     -0.001 &      0.000 &     -0.002 &      0.042 &      0.041 &      0.022 &       1.61 \\
+       100 &        500 &         42 &     -0.002 &     -0.005 &     -0.003 &      0.044 &      0.043 &      0.024 &     -0.002 &     -0.005 &     -0.003 &      0.044 &      0.043 &      0.024 &       1.27 \\
+       100 &        500 &        500 &     -0.012 &     -0.009 &      0.003 &      0.078 &      0.064 &      0.061 &     -0.011 &     -0.008 &     -0.006 &      0.076 &      0.063 &      0.061 &       1.94 \\\hline
+       100 &       1000 &          2 &     -0.003 &      0.002 &      0.000 &      0.030 &      0.030 &      0.016 &     -0.002 &      0.002 &      0.000 &      0.030 &      0.029 &      0.015 &       3.22 \\
+       100 &       1000 &         42 &      0.009 &      0.001 &     -0.002 &      0.031 &      0.030 &      0.017 &      0.009 &      0.001 &     -0.002 &      0.031 &      0.030 &      0.017 &       2.62 \\
+       100 &       1000 &        500 &     -0.001 &     -0.003 &      0.001 &      0.055 &      0.045 &      0.043 &     -0.002 &     -0.003 &     -0.002 &      0.054 &      0.045 &      0.044 &       4.79 \\ \hline
+       100 &       2000 &          2 &     -0.001 &      0.002 &      0.001 &      0.021 &      0.021 &      0.011 &      0.000 &      0.001 &      0.001 &      0.021 &      0.021 &      0.011 &       5.06 \\
+       100 &       2000 &         42 &      0.004 &     -0.005 &      0.001 &      0.022 &      0.022 &      0.012 &      0.004 &     -0.005 &      0.001 &      0.022 &      0.021 &      0.012 &       4.13 \\
+       100 &       2000 &        500 &      0.004 &      0.000 &     -0.002 &      0.039 &      0.032 &      0.031 &      0.004 &      0.000 &     -0.003 &      0.038 &      0.032 &      0.031 &       6.06 \\
+       \hline
+\end{array}\end{matrix}}
+$$
+
+
+
+
+### Effects of Association Parameters
+
+This section investigates the performance of the *GMM* lapse estimator by varying the size of the association parameters. Consistent with earlier results on the performance of the estimators, We used $n=2000$ for the sample size and 100 for the number of simulations. Further, this section only reports results for $\phi_1=\phi_2=42$, the case where approximately half the outcomes are zero and the other half a continuous amount. We are interested in the performance of these *GMM* copula based estimators in the presence of a significant amount of discrete data.
+
+The following table shows little difference in the performance of the *GMM* due to changes in the association parameters. This suggests that the estimator is robust to the specification of values of $\rho$.
+
+$$
+{\small \begin{matrix}
+\begin{array}{rrr|rrr|rrr}\hline
+\rho_{LA} & \rho_{LH} & \rho_{AH} &
+\textbf{ GMM} &   \textbf{Bias}    &      & 
+\textbf{ GMM} &   \textbf{ Std}    &   \textbf{Error}   \\
+ & & &
+ \textbf{ LA} &   \textbf{ LH} &   \textbf{ AH} &
+ \textbf{ LA} &   \textbf{ LH} &   \textbf{ AH}  \\ \hline
+      -0.3 &       -0.3 &       -0.3 &      0.001 &      0.001 &      0.000 &      0.021 &      0.021 &      0.011 \\
+      -0.3 &       -0.3 &          0 &      0.003 &     -0.002 &      0.000 &      0.021 &      0.021 &      0.012 \\
+      -0.3 &       -0.3 &        0.3 &      0.001 &      0.000 &     -0.001 &      0.021 &      0.021 &      0.011 \\
+      -0.3 &          0 &       -0.3 &      0.002 &     -0.002 &      0.001 &      0.021 &      0.022 &      0.011 \\
+      -0.3 &          0 &          0 &      0.001 &      0.001 &      0.001 &      0.022 &      0.022 &      0.012 \\
+      -0.3 &          0 &        0.3 &     -0.002 &     -0.002 &      0.000 &      0.021 &      0.022 &      0.011 \\
+       0.3 &       -0.3 &       -0.3 &      0.001 &      0.002 &      0.001 &      0.020 &      0.021 &      0.011 \\
+       0.3 &       -0.3 &          0 &      0.002 &     -0.001 &      0.001 &      0.020 &      0.021 &      0.012 \\
+       0.3 &       -0.3 &        0.3 &      0.003 &      0.001 &      0.000 &      0.020 &      0.021 &      0.011 \\
+       0.3 &          0 &       -0.3 &      0.001 &      0.002 &      0.001 &      0.020 &      0.022 &      0.011 \\
+       0.3 &          0 &          0 &      0.002 &     -0.004 &      0.001 &      0.020 &      0.022 &      0.012 \\
+       0.3 &          0 &        0.3 &      0.005 &      0.004 &      0.001 &      0.021 &      0.023 &      0.011 \\
+ \hline
+\end{array}\end{matrix}}
+$$
+
+## Appendix A. Lapse Likelihood
+
+
+With the independence over time, the joint distribution function is
+$$
+\begin{array}{cl}
+& \Pr \left(L_{i1} \le r_{1}, \ldots, L_{im} \le r_{m}, Y_{1,i1} \le y_{11}, \ldots, Y_{1,im} \le y_{1m}
+, Y_{2,i1} \le y_{21}, \ldots, Y_{2,im} \le y_{2m} \right) \\
+& \ \ \ \ = \prod_{t=1}^m \Pr \left(L_{it} \le r_{t},  Y_{1,it} \le y_{1t},  Y_{2,it} \le y_{2t}  \right) \\
+& \ \ \ \ = \prod_{t=1}^m C\left(F_{Lit}(r_{t}), F_{1,it}(y_{1t}), F_{2,it}(y_{2t}) \right) .
+\end{array}
+$$
+Here, $F_{Lit}$, $F_{1,it}$, and $F_{2,it}$ represent the marginal distributions of $L_{it}$, $Y_{1,it}$, and $Y_{2,it}$, respectively. 
+
+Dependence among these three random variables is modeled using a Gaussian copula $C$ with dependence parameters
+$$
+\boldsymbol \Sigma  = \left(
+\begin{array}{ccc}
+1         & \rho_{LA}  & \rho_{LH} \\
+\rho_{LA} & 1          & \rho_{AH} \\
+\rho_{LH} & \rho_{AH}  & 1 \\
+    \end{array}
+\right) .
+$$
+
+It is convenient to introduce the time to lapse variable $T_i$ that represents the time that the $i$th policyholder lapses. Specifically,
+$$
+T_i = \left\{
+\begin{array}{cl}
+1 & \text{if }L_{i1}=1 \\
+2 & \text{if }L_{i1}=0,L_{i2}=1 \\
+\vdots & \ \ \ \ \ \vdots \\
+t & \text{if }L_{i1}=0,\ldots,L_{i,t-1}=0, L_{i,t}=1 \\
+\vdots & \ \ \ \ \  \vdots \\
+m & \text{if }L_{i1}=0,\ldots,L_{i,m-1}=0, L_{im}=1 \\
+m+1 & \text{if }L_{i1}=0,\ldots,L_{i,m}=0 \\
+    \end{array}
+\right.
+$$
+We can organize the observed data based on the time to lapse variable. Specifically, suppose that we observe $T_i=t$ outcome periods for $t=1, \ldots, m+1$. Then, the observed likelihood is based on the distribution function
+$$
+\begin{array}{ll}
+& \Pr \left(T_i=t, Y_{1,i1} \le y_{11}, \ldots, Y_{1,it} \le y_{1t}
+, Y_{2,i1} \le y_{21}, \ldots, Y_{2,it} \le y_{2t} \right) \\
+& \ \ \ \ = \Pr \left(
+L_{i1}=0,\ldots,L_{i,t-1}=0, L_{i,t}=1, L_{i,t+1} \le \infty, \ldots, L_{im} \le \infty, \right.\\
+& \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ Y_{1,i1} \le y_{11}, \ldots, Y_{1,it} \le y_{1t},Y_{1,i,t+1} \le \infty, \ldots, Y_{1,im} \le \infty,\\
+& \left. \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ Y_{2,i1} \le y_{21}, \ldots, Y_{2,it} \le y_{2t},Y_{2,i,t+1} \le \infty, \ldots, Y_{2,im} \le \infty \right) 
+\end{array}
+$$
+
+If a policy is renewed for all $m$ periods, then $T_i=m+1$ and the observed likelihood is based on
+$$
+\begin{array}{ll}
+\Pr \left(T_i=m+1, Y_{1,i1} \le y_{11}, \ldots, Y_{1,im} \le y_{1m}
+, Y_{2,i1} \le y_{21}, \ldots, Y_{2,im} \le y_{2m} \right) \\
+\ \ \ \ \ \ \ = \prod_{s=1}^{m} C\left(F_{Lis}(0) , F_{1,is}(y_{1s}), F_{2,is}(y_{2s}) \right) . \notag
+\end{array}
+$$
+
+If lapse occurs, then $T_i \le m$ and the observed likelihood is based on the distribution function
+$$
+\begin{array}{ll}
+&\Pr \left(T_i=t, Y_{1,i1} \le y_{11}, \ldots, Y_{1,it} \le y_{1t}
+, Y_{2,i1} \le y_{21}, \ldots, Y_{2,it} \le y_{2t} \right) \\
+& \ \ \ \ = \left\{C\left(1, F_{1,it}(y_{1t}),F_{2,it}(y_{2t}) \right)-C\left(F_{Lit}(0) , F_{1,it}(y_{1t}),F_{2,it}(y_{2t}) \right)\right\}
+\prod_{s=1}^{t-1}
+C\left(F_{Lis}(0) , F_{1,is}(y_{1s}),F_{2,is}(y_{2s}) \right) \notag .
+\end{array}
+$$
+
+
+
+
+Note that the evaluation of this function involves a trivariate copula.
+
+For the time to lapse variable, the marginal distribution is 
+$$
+\begin{aligned}\Pr \left(T_i=t \right) &=\Pr \left(T_i=t, Y_{1,i1} \le \infty , \ldots, Y_{1,it} \le \infty
+, Y_{2,i1} \infty, \ldots, Y_{2,it} \le \infty \right) \\
+&=\left\{\begin{array}{cl}
+\prod_{s=1}^{m} F_{Lis}(0)  & t=m+1 \\
+(1-F_{Li,t}(0))\prod_{s=1}^{t-1} 
+F_{Lis}(0)& 1 \le t \le m .
+\end{array}\right.
+\end{aligned}
+$$
+Thus, the conditional distribution function is
+$$
+\begin{array}{ll}
+&\Pr \left(Y_{1,i1} \le y_{11}, \ldots, Y_{1,it} \le y_{1t}, Y_{2,i1} \le y_{21}, \ldots, Y_{2,it} \le y_{2t} | T_i=t \right) \\
+& \ \ \ \ = \frac{\Pr \left(T_i=t ,Y_{1,i1} \le y_{11}, \ldots, Y_{1,it} \le y_{1t}, Y_{2,i1} \le y_{21}, \ldots, Y_{2,it} \le y_{2t}\right)}{\Pr(T_i=t)}\\
+& \ \ \ \ = 
+\left(\frac{C\left(1, F_{1,it}(y_{1t}),F_{2,it}(y_{2t}) \right)-C\left(F_{Lit}(0) , F_{1,it}(y_{1t}),F_{2,it}(y_{2t}) \right)}
+{1-F_{Lit}(0)} \right)^{I(t\le m)}
+\prod_{s=1}^{t-1}
+\frac{C\left(F_{Lis}(0) , F_{1,is}(y_{1s}),F_{2,is}(y_{2s})\right)}{F_{Lis}(0)} 
+\end{array}
+$$
+for $t=1, \ldots, m+1$. From this, the corresponding conditional distribution function is
+
+$$
+\begin{aligned}\Pr \left(Y_{1,is} \le y_1, Y_{2,is} \le y_2 |T_i=t \right) &= \\
+&\left\{\begin{array}{cl}
+\frac{C\left(F_{Lis}(0), F_{1,is}(y_1), F_{2,is}(y_2) \right)}{F_{Lis}(0)} & \text{for  } s<t \le m+1 \\
+\frac{C\left(1, F_{1,is}(y_{1}),F_{2,is}(y_{2}) \right)-C\left(F_{Lis}(0) , F_{1,is}(y_{1}),F_{2,is}(y_{2}) \right)}
+{1-F_{Lis}(0)}  & \text{for  }s=t \le m
+\end{array}\right.
+\end{aligned}
+$$
+
+Thus, the hybrid mass function/density  has different expressions when (i) no lapse is involved  and when (ii) there is lapse involved.
+
+##### No Lapse 
+
+For the first case where lapse has not yet occurred, $s<t \le m+1$, this has hybrid probability density/mass function 
+$$
+f_{i12,s|t}(y_1,y_2) = \frac{1}{F_{Lis}(0)} \left\{
+\begin{array}{ll}
+C\left(F_{Lis}(0), F_{1,is}(0), F_{2,is}(0) \right)
+& y_1=0,y_2=0 \\
+C_{2}\left(F_{Lis}(0), F_{1,is}(y_1), F_{2,is}(0) \right) f_{1,is}(y_1)
+& y_1>0,y_2=0 \\
+C_{3}\left(F_{Lis}(0), F_{1,is}(0), F_{2,is}(y_2) \right)f_{2,is}(y_2)
+& y_1=0,y_2>0\\
+C_{23}\left(F_{Lis}(0), F_{1,is}(y_1), F_{2,is}(y_2) \right)  f_{1,is}(y_1) f_{2,is}(y_2)
+& y_1>0,y_2>0
+\end{array} \right.
+$$
+Here, $C_{2}(u_1,u_2,u_3) = \frac{\partial}{\partial u_2} C(u_1,u_2,u_3)$ represents the partial derivative of the copula with respect to the second argument and similarly for $C_{3}$. The term $C_{23}$ is a second derivative with respect to the second and third arguments. Further $f_{j,is}$ is the density function corresponding to the distribution function $F_{j,is}$.
+
+##### Lapse  
+For the second case where lapse has occurred, $s=t \le m$, this has hybrid probability density/mass function 
+
+$$
+\begin{array}{ll}
+f_{i12,s|t}(y_1,y_2) = \frac{1}{1-F_{Lit}(0)}  \times \\ ~ \\
+\left\{
+\begin{array}{ll}
+\sum_{i=0}^1  \left(-1\right)^{i}
+C \left(F_{Lis}(0)^{i}, F_{1,is}(0),F_{2,is}(0)\right)
+& y_1=0,y_2=0 \\
+\left\{\sum_{i=0}^1  \left(-1\right)^{i}
+C_{2}\left(F_{Lis}(0)^{i}, F_{1,is}(y_1), F_{2,is}(0) \right) \right\}
+f_{1,is}(y_1)
+& y_1>0,y_2=0 \\
+\left\{
+\sum_{i=0}^1  \left(-1\right)^{i}
+C_{3}\left(F_{Lis}(0)^{i}, F_{1,is}(0), F_{2,is}(y_2) \right)\right\}
+f_{2,is}(y_2)
+& y_1=0,y_2>0  \\
+\left\{
+\sum_{i=0}^1  \left(-1\right)^{i}
+C_{23}\left(F_{Lis}(0)^{i}, F_{1,is}(y_1), F_{2,is}(y_2) \right)\right\}
+f_{1,is}(y_1) f_{2,is}(y_2)
+& y_1>0,y_2>0 .
+\end{array} \right.\end{array}
+$$
+
+Using this notation, the logarithmic likelihood is
+$$
+L = \sum_{i=1}^n \sum_{s=1}^{t_i \wedge m}  \ln f_{i12s|t_i}(y_{1is},y_{2is}) .
+$$
+
+
+
+## Appendix B. Trivariate Gaussian Copula Derivatives with Respect to Association Parameters
+
+From the score function, we see we need to evaluate derivatives of a trivariate copula. We evaluate $\frac{\partial}{\partial \rho} C(u_1,u_2,u_3)$ in Appendix B.1, $\frac{\partial}{\partial \rho} C_2(u_1,u_2,u_3)$ in Appendix B.2, and $\frac{\partial}{\partial \rho} C_{23}(u_1,u_2,u_3)$ in Appendix B.3. For simplicity, we use the following generic expression for the association matrix
+$$
+\boldsymbol \Sigma  = \left(
+\begin{array}{ccccc}
+1         & \rho_{12}  & \rho_{13} \\
+\rho_{12} & 1          & \rho_{23} \\
+\rho_{13} & \rho_{23}  & 1 \\
+    \end{array}
+\right) .
+$$
+
+
+### Appendix B.1. No Derivatives
+
+We first cite a general result due to Plackett (1954). Consider a $d$ dimensional multivariate normal distribution with variance-covariance matrix $\boldsymbol \Sigma$. As we will use this as a basis for defining copulas, consider the mean to be zero and variance to be 1 so that the diagonal elements of $\boldsymbol \Sigma$ equal 1. Let $\Phi_d( \cdot; \boldsymbol \Sigma)$ be the corresponding distribution function. Partition the matrix as
+$$
+ \boldsymbol \Sigma = \left(
+\begin{array}{cc}
+ \boldsymbol \Sigma_{11} &  \boldsymbol \Sigma_{12}\\
+ \boldsymbol \Sigma_{12}^{\prime} &   \boldsymbol \Sigma_{22}
+\end{array}
+\right)
+ \ \ \ \ \ \ \
+\boldsymbol \Sigma_{11} = \left(
+\begin{array}{cc}
+1 & \rho_{12}\\
+\rho_{12} &  1
+\end{array}
+\right) ,
+$$
+so that  $\boldsymbol \Sigma_{11}$ is the submatrix for the first two elements and $\rho_{12}$ is the corresponding correlation coefficient. Then, from Plackett (1954), we have
+$$
+\frac{\partial}{\partial \rho_{12}} \Phi_d( \mathbf{z}; \boldsymbol \Sigma) =
+\phi_2( \mathbf{z}_1; \boldsymbol \Sigma_{11}) ~ \Phi_{d-2}( \mathbf{z}_2^*; \boldsymbol \Sigma_{22\cdot 1}) ,
+$$
+where $\phi_2(\cdot)$ is a bivariate normal density, $\mathbf{z}_1 = (z_1,z_2)^{\prime}$, and 
+$$
+\mathbf{z}_2^* =
+\left(  \begin{array}{c} z_3 \\ \vdots \\ z_d \end{array} \right)
+-  \boldsymbol \Sigma_{12}^{\prime} \boldsymbol \Sigma_{11}^{-1}
+\mathbf{z}_1 \ \ \ \text{and} \ \ \
+\boldsymbol \Sigma_{22\cdot 1} = \boldsymbol \Sigma_{22}
+-  \boldsymbol \Sigma_{12}^{\prime} \boldsymbol \Sigma_{11}^{-1}\boldsymbol \Sigma_{12}  .
+$$
+
+Starting with uniform random variables $u_j$, we define the normal scores $z_j = \Phi^{-1}(u_j)$. For $d=3$, we have
+$$
+\frac{\partial}{\partial \rho_{12}}  C(u_1,u_2,u_3) =
+\phi_2 \left( \left(  \begin{array}{c} z_1 \\ z_2 \end{array} \right); \boldsymbol \Sigma_{11} \right) 
+~ \Phi( z_3^*; \Sigma_{22\cdot 1}).
+$$
+
+where
+$$
+z_3^* =
+z_3
+-  \boldsymbol \Sigma_{12}^{\prime} \boldsymbol \Sigma_{11}^{-1}
+\left(  \begin{array}{c} z_1 \\ z_2 \end{array} \right), \ \ \
+\boldsymbol \Sigma_{11} = \left(
+\begin{array}{cc}
+1 & \rho_{12}\\
+\rho_{12} &  1
+\end{array}
+\right), 
+\ \ \ \
+\boldsymbol \Sigma_{12} = \left(
+\begin{array}{c}
+\rho_{13}\\
+\rho_{23} \\
+\end{array}
+\right), 
+\ \ \ \
+\Sigma_{22\cdot 1} = 1
+-  \boldsymbol \Sigma_{12}^{\prime} \boldsymbol \Sigma_{11}^{-1}\boldsymbol \Sigma_{12}  .
+$$
+
+
+### Appendix B.2. One Derivative
+
+We next derive the partial derivative with respect to the association parameter of the partial derivative of the copula function $C_3 \left(u_1, u_2, u_3 \right)$. For a derivative with respect to one argument, we have
+$$
+C_3 \left(u_1, u_2, u_3 \right) =C \left(u_1, u_2 | u_3 \right) = \Phi_2 \left(
+z_1 - \mu_{12 \cdot 3, 1}, z_2 - \mu_{12 \cdot 3, 2} ; \boldsymbol \Sigma_{12 \cdot 3}
+\right)
+$$
+where
+$$
+\boldsymbol  \mu _{12 \cdot 3} =
+\left(\begin{array}{c} \mu_{12 \cdot 3, 1} \\ \mu_{12 \cdot 3, 2}  \\ \end{array}\right)
+=  z_3
+\left(\begin{array}{c}   \rho_{13} \\ \rho_{23}  \\ \end{array}\right)
+ \ \ \ \text{and} \ \ \
+\boldsymbol \Sigma_{12 \cdot 3} =
+\left(\begin{array}{cc} 1 & \rho_{12} \\ \rho_{12} & 1 \\ \end{array}\right)
+-
+\left(\begin{array}{c} \rho_{13} \\ \rho_{23}  \\ \end{array}\right)
+\left(\begin{array}{cc} \rho_{13} & \rho_{23}  \\ \end{array}\right) .
+$$ 
+
+Recall, for two mean zero, variance one, normally distributed random variables $X_1$ and $X_2$, that the conditional distribution of $X_2$ given $X_1 = x_1$ is normally distributed with mean $\rho_{X}  x_1$ and variance $(1-\rho_{X}^2)$. Because $\frac{\partial}{\partial x_1} \Pr(X_1\le x_1, X_2\le x_2) = f_{X_1}(x_1) \Pr( X_2\le x_2 | X_1 = x_1)$,
+we may define
+$$
+h_1^*(x_1,x_2,\rho_{X}) = \frac{\partial}{\partial x_1} \Phi_2(x_1,x_2, \rho_{X}) =
+ \phi\left(x_1\right) \Phi\left(  \frac{x_2 - \rho_{X} x_1  }{ \sqrt{1-\rho_{X}^2}} \right).
+$$
+
+Consider a matrix $\boldsymbol \Sigma = \left(\begin{array}{cc} \sigma_1^2 &  \sigma_{12} \\ \sigma_{12} & \sigma_2^2 \end{array}\right)$ and
+
+$$
+\Phi_2\left(x_1, x_2, \boldsymbol \Sigma \right) = \Phi_2\left(\frac{x_1}{\sigma_1},\frac{x_2}{\sigma_2}, \rho_x \right)
+= C\left(\Phi\left(\frac{x_1}{\sigma_1}\right),\Phi\left(\frac{x_2}{\sigma_2}\right), \rho_x \right)
+$$
+where $\rho_x=\sigma_{12}/(\sigma_1 \sigma_2)$.
+
+We now evaluate a derivative of this using the matrix $\boldsymbol \Sigma_{12 \cdot 3}$, so that $\sigma_1^2 = 1-\rho_{13}^2$, $\sigma_2^2 = 1-\rho_{23}^2$, and $\rho_{X} \sigma_1\sigma_2= \rho_{12} - \rho_{13}\rho_{23}$. With this notation, we have
+$$
+\begin{array}{ll}
+&\frac{\partial}{\partial \rho} \Phi_2 \left( z_1 - \mu_{12 \cdot 3, 1}, z_2 - \mu_{12 \cdot 3, 2} ; \boldsymbol \Sigma_{12 \cdot 3}\right) 
+=
+\frac{\partial}{\partial \rho} \Phi_2 \left( \frac{z_1 - \mu_{12 \cdot 3, 1}}{\sigma_1}, \frac{z_2 - \mu_{12 \cdot 3, 2} }{\sigma_2}; \rho_x\right) 
+\\
+& \ \ \ \ \ = \frac{\partial}{\partial \rho} \Phi_2 \left( z_1^*, z_2^*; \rho_x\right) \\
+& \ \ \ \ \ =
+h_1^*\left( z_1^*, z_2^*; \rho_x\right)\frac{\partial }{\partial \rho} z_1^*  +  
+h_1^*\left( z_2^*, z_1^*; \rho_x\right)\frac{\partial }{\partial \rho} z_2^*  +  
+\phi_2\left( z_1^*, z_2^*; \rho_x\right)\frac{\partial }{\partial \rho} \rho_x , \\
+\end{array}
+$$
+where $z_1^*=\left(z_1 - \mu_{12 \cdot 3, 1}\right)/\sigma_1$ and similarly for $z_2^*$. The last equality uses a special case of the Plackett (1954) result
+$$ 
+\frac{\partial}{\partial \rho_x}
+\Phi_2(y_1,y_2; \boldsymbol \Sigma) =  \phi_2(y_1,y_2; \boldsymbol \Sigma)
+$$
+where $\boldsymbol \Sigma = \left(\begin{array}{cc} 1 &  \rho_x \\ \rho_x & 1 \end{array}\right)$. We also need
+
+$$
+\frac{\partial}{\partial \rho} z_1^* = \frac{\partial }{\partial \rho} \left(\frac{z_1 - \mu_{12 \cdot 3, 1}}{\sigma_1}\right)
+= \frac{\partial }{\partial \rho} \left(\frac{z_1 - z_3 \rho_{13}}{\sqrt{1-\rho_{13}^2}}\right)
+= \left\{\begin{array}{cl}
+0 & \rho = \rho_{12} \\
+\frac{z_1\rho_{13} - z_3 }{(1-\rho_{13}^2)^{3/2}} & \rho = \rho_{13} \\
+0 & \rho = \rho_{23} \\
+\end{array} \right.
+$$ 
+
+In the same way
+$$
+\frac{\partial}{\partial \rho} z_2^* = \frac{\partial }{\partial \rho} \left(\frac{z_2 - \mu_{12 \cdot 3, 2}}{\sigma_2}\right)
+= \frac{\partial }{\partial \rho} \left(\frac{z_2 - z_3 \rho_{23}}{\sqrt{1-\rho_{23}^2}}\right)
+= \left\{\begin{array}{cl}
+0 & \rho = \rho_{12} \\
+0 & \rho = \rho_{13} \\
+\frac{z_2\rho_{23} - z_3 }{(1-\rho_{23}^2)^{3/2}} & \rho = \rho_{23} 
+\end{array} \right.
+$$ 
+
+Similarly,
+$$
+\frac{\partial}{\partial \rho} \rho_x = \frac{\partial }{\partial \rho} \left(\frac{\rho_{12} - \rho_{13}\rho_{23}}{\sigma_1 \sigma_2}\right)
+= \frac{\partial }{\partial \rho} \left(\frac{\rho_{12} - \rho_{13}\rho_{23}}{(1-\rho_{13}^2)^{1/2} (1-\rho_{23}^2)^{1/2}}\right)
+= \left\{\begin{array}{cl}
+\frac{1}{(1-\rho_{13}^2)^{1/2} (1-\rho_{23}^2)^{1/2}} & \rho = \rho_{12} \\
+\frac{\rho_{12}\rho_{13}-\rho_{23}}{(1-\rho_{13}^2)^{3/2} (1-\rho_{23}^2)^{1/2}} & \rho = \rho_{13} \\
+\frac{\rho_{12}\rho_{23}-\rho_{13}}{(1-\rho_{13}^2)^{1/2} (1-\rho_{23}^2)^{3/2}}& \rho = \rho_{23} 
+\end{array} \right.
+$$ 
+
+Summarizing
+
+$$
+\begin{array}{ll}
+&\frac{\partial}{\partial \rho} C_3 \left(u_1, u_2, u_3 \right)=
+h_1^*\left( z_1^*, z_2^*; \rho_x\right)\frac{\partial }{\partial \rho} z_1^*  +  
+h_1^*\left( z_2^*, z_1^*; \rho_x\right)\frac{\partial }{\partial \rho} z_2^*  +  
+\phi_2\left( z_1^*, z_2^*; \rho_x\right)\frac{\partial }{\partial \rho} \rho_x , \\
+\end{array}
+$$
+where $z_1^*= (z_1 - z_3 \rho_{13})/\sigma_1$, $z_2^*= (z_2 - z_3 \rho_{23})/\sigma_2$, $\sigma_1^2 = 1-\rho_{13}^2$, $\sigma_2^2 = 1-\rho_{23}^2$, and $\rho_{X} \sigma_1\sigma_2= \rho_{12} - \rho_{13}\rho_{23}$, and
+$$
+h_1^*(x_1,x_2,\rho_{X}) = 
+ \phi\left(x_1\right) \Phi\left(  \frac{x_2 - \rho_{X} x_1  }{ \sqrt{1-\rho_{X}^2}} \right).
+$$
+
+###  Appendix B.3. Two Derivatives
+
+We next derive the partial derivative with respect association parameter of the copula function $C_{23} \left(u_1, u_2, u_3 \right)$. For derivatives with respect to two arguments, we have
+$$
+C_{23} \left(u_1, u_2, u_3 \right) =
+C \left(u_1 | u_{2}, u_3\right)c \left(u_{2}, u_3\right)
+ \ \ \ \text{with} \ \ \
+C \left(u_1 | u_{2}, u_3\right) = \Phi\left( z_1 - \mu_{1 \cdot 23}; \sigma_{1 \cdot 23} \right) ,
+$$
+
+where
+$$
+\mu_{1 \cdot 23} =
+\left(\begin{array}{cc} \rho_{12} & \rho_{13} \\ \end{array}\right)
+\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}
+\left(\begin{array}{c} z_2  \\ z_3   \\  \end{array}\right)
+ \ \ \ \text{and} \ \ \
+\sigma_{1 \cdot 23} = 1-
+\left(\begin{array}{cc} \rho_{12} & \rho_{13} \\  \end{array}\right)
+\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}
+\left(\begin{array}{c} \rho_{12} \\ \rho_{13} \\  \end{array}\right) .
+$$
+
+
+Now
+$$
+\frac{\partial}{\partial \rho}  C_{23} \left(u_1, u_2, u_3 \right) =
+C \left(u_1 | u_{2}, u_3\right) \frac{\partial}{\partial \rho} c \left(u_{2}, u_3\right) 
++ \left(\frac{\partial}{\partial \rho} C \left(u_1 | u_{2}, u_3\right)\right) c \left(u_{2}, u_3\right) .
+$$
+Further,
+$$
+\begin{array}{ll}
+\frac{\partial}{\partial \rho} C \left(u_1| u_2, u_3\right)&=
+\frac{\partial}{\partial \rho} \Phi\left(z_1 - \mu_{1 \cdot 23}; \sigma_{1 \cdot 23}\right) \nonumber \\
+&=
+\phi\left( \frac{z_1 - \mu_{1 \cdot 23}} {\sqrt{\sigma_{1 \cdot 23}}}\right) \frac{\partial}{\partial \rho}
+\left( \frac{z_1 - \mu_{1 \cdot 23}} {\sqrt{\sigma_{1 \cdot 23}}}\right) \nonumber \\
+&=
+- \phi\left( \frac{z_1 - \mu_{1 \cdot 23}} {\sqrt{\sigma_{1 \cdot 23}}}\right)
+\frac{1}{\sigma_{1 \cdot 23}^{3/2}}
+\left(
+ \sigma_{1 \cdot 23} \frac{\partial}{\partial \rho} \mu_{1 \cdot 23} +
+\frac{1}{2}(z_1 - \mu_{1 \cdot 23}) \frac{\partial}{\partial \rho} \sigma_{1 \cdot 23}
+\right) .
+\end{array} 
+$$
+
+First recall
+$\frac{\partial}{\partial \rho} \boldsymbol \Sigma^{-1} = -\boldsymbol \Sigma^{-1} \left(\frac{\partial}{\partial \rho} \boldsymbol \Sigma\right) \boldsymbol \Sigma^{-1}$. Now, with $\mu_{1 \cdot 23} = \left(\begin{array}{cc} \rho_{12} & \rho_{13}\end{array}\right) \left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1\end{array}\right)^{-1} \left(\begin{array}{c} z_2  \\ z_3 \end{array}\right)$, we have
+
+$$
+\frac{\partial}{\partial \rho} \mu_{1 \cdot 23}
+= \left\{\begin{array}{cl}
+\left(\begin{array}{cc} 1 & 0 \\ \end{array}\right)
+\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}
+\left(\begin{array}{c} z_2  \\ z_3   \\ \end{array}\right)& \rho = \rho_{12} \\
+\left(\begin{array}{cc} 0 & 1 \\ \end{array}\right)
+\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}
+\left(\begin{array}{c} z_2  \\ z_3   \\ \end{array}\right) & \rho = \rho_{13} \\
+\left(\begin{array}{cc} \rho_{12} & \rho_{13} \\ \end{array}\right)
+\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}
+\left(\begin{array}{cc} 0& 1 \\ 1&0  \\ \end{array}\right)
+\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}
+\left(\begin{array}{c} z_2  \\ z_3   \\ \end{array}\right)& \rho = \rho_{23} 
+\end{array} \right.
+$$ 
+
+Further, with $\sigma_{1 \cdot 23} = 1-\left(\begin{array}{cc} \rho_{12} & \rho_{13} \\  \end{array}\right)\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}\left(\begin{array}{c} \rho_{12} \\ \rho_{13} \\  \end{array}\right)$, we have
+
+$$
+\frac{\partial}{\partial \rho} \sigma_{1 \cdot 23}
+= \left\{\begin{array}{cl}
+- 2
+\left(\begin{array}{cc} 1 &  0 \\ \end{array}\right)
+\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}
+\left(\begin{array}{c} \rho_{12} \\ \rho_{13} \\ \end{array}\right)& \rho = \rho_{12} \\
+- 2
+\left(\begin{array}{cc} 0 &  1 \\ \end{array}\right)
+\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}
+\left(\begin{array}{c} \rho_{12} \\ \rho_{13} \\ \end{array}\right) & \rho = \rho_{13} \\
+-
+\left(\begin{array}{cc} \rho_{12} &  \rho_{13} \\ \end{array}\right)
+\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}
+\left(\begin{array}{cc} 0& 1 \\ 1&0  \\ \end{array}\right)
+\left(\begin{array}{cc} 1& \rho_{23} \\ \rho_{23}&1  \\ \end{array}\right)^{-1}
+\left(\begin{array}{c} \rho_{12} \\ \rho_{13} \\ \end{array}\right)& \rho = \rho_{23} 
+\end{array} \right.
+$$ 
+
+Derivatives of the bivariate density $c \left(u_{2}, u_3\right)$  follow directly from results of Schepsmeier and Stober (2012, page 2).
+
+Summarizing, 
+$$
+\frac{\partial}{\partial \rho}  C_{23} \left(u_1, u_2, u_3 \right) =
+\Phi\left( z_1 - \mu_{1 \cdot 23}; \sigma_{1 \cdot 23} \right) \frac{\partial}{\partial \rho} c \left(u_{2}, u_3\right) 
++ \left(\frac{\partial}{\partial \rho} C \left(u_1 | u_{2}, u_3\right)\right) c \left(u_{2}, u_3\right),
+$$
+where
+$$
+\begin{array}{ll}
+\frac{\partial}{\partial \rho} C \left(u_1| u_2, u_3\right) =
+- \phi\left( \frac{z_1 - \mu_{1 \cdot 23}} {\sqrt{\sigma_{1 \cdot 23}}}\right)
+\frac{1}{\sigma_{1 \cdot 23}^{3/2}}
+\left(
+ \sigma_{1 \cdot 23} \frac{\partial}{\partial \rho} \mu_{1 \cdot 23} +
+\frac{1}{2}(z_1 - \mu_{1 \cdot 23}) \frac{\partial}{\partial \rho} \sigma_{1 \cdot 23}
+\right) .
+\end{array} 
+$$
+
+
+
+
+
+
+
+
+

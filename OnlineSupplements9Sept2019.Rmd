@@ -1,0 +1,60 @@
+---
+title: "Online Supplements. To support the paper: \n `Dependence Modeling of Multivariate Longitudinal Data with Dropout` "
+#author: EW (Jed) Frees, University of Wisconsin-Madison
+output: 
+  pdf_document:
+    toc: yes
+    toc_depth: 4
+    number_sections: true
+    includes:
+      in_header: preamble.tex
+# fontsize: 11pt
+#  slidy_presentation:
+#    font_adjustment: +2
+  # html_document:
+  #   toc: yes
+  #   fig_width: 6
+  #   fig_height: 4
+  #   toc_depth: 4
+  #   code_folding: hide
+  #   number_sections: true
+bibliography: LapseJan2018.bib
+---
+
+
+```{r child = 'InsurApplications.Rmd'}
+```
+
+
+\pagebreak
+
+```{r child = 'GaussianCopulaDetails.Rmd'}
+```
+
+
+\pagebreak
+
+```{r child = 'TweedieGMMSimulation.Rmd'}
+```
+
+\pagebreak
+
+```{r child = 'LapseSimulation.Rmd'}
+```
+
+\pagebreak
+
+```{r child = 'CaseStudy2018.Rmd'}
+```
+
+
+Time taken for this report: `r difftime(Sys.time(), time0, units='mins')` minutes. 
+
+# References {-}
+
+<script language="javascript">
+function togglecode(id1,id2) {
+   var ele = document.getElementById(id1); var text = document.getElementById(id2);
+   if (ele.style.display == "block") {ele.style.display = "none"; text.innerHTML = "Show R Code";}
+      else {ele.style.display = "block"; text.innerHTML = "Hide R Code";}}
+</script>

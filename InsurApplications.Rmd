@@ -1,0 +1,49 @@
+<p style="text-align:right;">
+*Date*: `r today <- Sys.Date();format(today, format="%d %B %Y")`</p>
+
+# Online Supplement 1: Copula Regression Insurance Applications {#S:CopRegLiterature}
+
+## Dependence and Foundations of Insurance {#S:InsuranceDependence}
+
+At a basic level, modeling dependence is critical for insurance. Insurance systems are predicated on the pooling of risks. Insurers pool risks in order to enjoy the benefits of diversification; but, those benefits depend upon relationships among risks.
+
+Standard introductory models assume independence among risks. However, there are also examples where risks are negatively related to one another and so provide a natural hedge. An example of this is mortality risk, where longer than anticipated mortality means additional costs for annuity policies (that pay while someone is alive) yet less costly (on a present value basis) for life insurance that pay when someone dies. More common is positive association among risks, such as the risk of flood to homes that are located close to one another. In these cases, there may be few diversification benefits; for example, flood insurance is not readily available on the private markets in the US because insurers are not able to diversify these risks.
+
+There are many sources of dependencies among risks in insurance. For example, analysts have begun to look at the *joint* effects of several types of claims outcomes. To illustrate, auto insurers cover claims that cover (a) injury to a party other than the insured; (b) damages to the insured (including injury and property damage), and (c) property damage to a party other than the insured. As another example, in homeowners insurance, analysis look at separate distributions for claims due to fire, theft, hail damage, and so forth. In healthcare management, there are several different types of medical expenditures (e.g., office based, inpatient hospital, emergency room, and so forth). In a similar vein, we can think about the dependence between how often claims occur (the frequency) and the claim amount (the severity) as different types of claim outcomes.
+
+Insurers are recognizing the many sources of dependencies among insurance outcomes in today's world where data information is becoming increasingly available,. As noted above, there may be several coverages under a single contract whose outcomes are naturally related. In a similar yet different way, there may be several people listed under a single contract (e.g., in auto or health) with different yet related coverages. Insurers are becoming more customer-focused and wish to understand relationships among the several risks associated with each contract. For example, at the personal level, it is common for a customer to have an auto, home, and umbrella policy with a company. Further, temporal relationships represent a component of dependence modeling that has been long recognized by insurers. Prior claim history can reveal important aspects of an insured's distribution that are not captured in rating variables.
+
+Claims are not the only type of outcome of interest to insurers where dependencies may be important. For example, in this paper, we examine whether or not a policy is renewed with an insurer (or the converse, whether a policyholder lapses).
+
+Insurers not only model risks at a contract level but also over a portfolio, or collection, of contracts. At the portfolio level, insurers understand intuitively the effects of spatial dependence. For example, for homeowners insurance, effects of hurricanes, hail, and earthquakes, can be important sources of dependence. Large commercial risks may be disaggregated geography but also by industry. Also at the portfolio level, risks share a common economic and political environment and so may depend on one another. For example, a portfolio of life insurance contracts share a common interest rate environment.
+
+## Copula Regression Modeling in Insurance 
+
+Copula regression modeling is ideally suited for applications where there are many variables available to explain outcomes (the regression portion) and where structural dependence among outcomes is critical (the copula portion). Compared to other multivariate techniques, copulas are particularly suitable in insurance applications because there is a lack of theory to support specification of a dependence structure and data-driven methods, such as copula modeling, fare well.
+
+The literature on copula insurance regression modeling is developing. See @kolev2009copula for a survey of the literature up until 2009. This section provides readers with additional background on selected topics.
+
+### Multivariate Severity Claim Outcomes 
+
+The classic insurance application of copula modeling involves several claim types, all of which are modeled as continuous outcomes. This is now a relatively mature area. To illustrate, @yang2011generalized investigate the three outcomes of interest, bodily injury, liability payments and the time-to-settlement, using auto injury data from the Insurance Research Council's Closed Claim Survey. From this survey, many policy, accident, drive, claimant and legal characteristics are available. In this paper, marginal distributions were fit using an exponential GB2 with additive variables and a new copula, a multivariate GB2, was introduced.
+
+For a different type of application involving multivariate continuous claims outcomes, @shi2011dependent examined paid personal and commercial auto claims. However, the unit of observation was not at the claim level but rather the sum of an insurer's claims by year of incurral and development year. The purpose of this modeling is to forecast claims and so explanatory variables used different functions of time. The paper investigates lognormal and gamma marginal distributions as well as a Frank and Gaussian copula to represent contemporaneous associations.
+
+### Longitudinal Claim Outcomes 
+
+Although (general) insurance contracts tend to be short term, policyholders routinely renew coverage and so it is natural to follow subjects over time, resulting in longitudinal data. To illustrate, @frees2005credibility study automobile bodily injury liability claims from a sample of $n$=29 Massachusetts towns of six years. They incorporated town characteristics such as per capita income and population per square mile as predictor variables. This paper uses Weibull, lognormal, gamma, for marginal fits and a $t$-copula for temporal associations. The focus of this paper is on predicting claims known as ``credibility'' in the insurance literature.
+
+Another example of longitudinal data is that of @sun2008heavy who study the occupancy rate of Wisconsin nursing home facilities. A novelty of this paper is that standard marginal distributions did not well fit this rate and so a generalized beta of a second kind, GB2, was introduced into the copula literature. There were many characteristics of nursing home facilities, such as number of beds and organizational structure, available for modeling. The paper studied 377 facilities observed over six years and used a $t$-copula with temporal associations.
+
+
+### Multivariate Frequency Severity Claim Outcomes 
+
+For models of frequency and severity, there have been fewer copula applications because of limitations imposed by the discreteness in frequency. To illustrate, @frees2010dependent studied nine types of homeowners claims (e.g., wind, water damage, theft, and so forth). Each claim type was decomposed into a zero-one frequency and severity component. Many policyholder characteristics were available. The marginal models consisted of logistic regressions for the frequency and gamma regressions for the severity.  Gaussian copulas used for severity but dependencies among frequency were modeled using classic dependency ratio methods for multivariate binary outcomes, not copulas. As another example of this approach, @frees2013actuarial studied five types of medical expenditures (e.g, inpatient hospital, emergency room and so forth).
+
+Papers utilizing copulas for the frequency portion are only starting to emerge. @czado2012mixed fit a Gaussian copula to the number and average claim size for 12,850 claims from auto policies. For marginal distributions, they used a Poisson model for frequencies and gamma for severities. In this paper, only claims are analyzed and so they restricted the number to be greater than zero.
+
+A longitudinal, multivariate, frequency severity model was fit in a recent paper by @frees2016multivariate. This paper studied approximately 1,000 local government entities are observed over five years. The outcomes of interest are property damage, auto collision and comprehensive, and contractor's equipment and characteristics of the entities were used as predictor variables. Zeroes in the frequency are retained and were model with  zero/one inflated Poisson and negative binomial distributions. A GB2 was used for severity and a Tweedie distribution for the combined frequency-severity. Gaussian and $t$-copulas are used for the dependence.
+
+### Multivariate Frequency Outcomes 
+
+The review of @nikoloulopoulos2013copula well summarizes this application area.

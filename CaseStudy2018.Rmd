@@ -1,0 +1,968 @@
+
+```{r echo = FALSE}
+#These are little switches that I  introduce to turn off the
+#execution of pieces of the code - used for debugging
+# EVALUATE_DOPLOTS <- FALSE
+# EVALUATE_MARGINALS <- FALSE
+# EVALUATE_PL <- FALSE
+# EVALUATE_GMM <- FALSE
+
+EVALUATE_DOPLOTS <- TRUE
+EVALUATE_MARGINALS <- TRUE
+EVALUATE_PL <- TRUE
+EVALUATE_GMM <- TRUE
+
+```
+
+# Online Supplement 5. Case Study: Joint Modeling of Insurance Claims and Lapsation
+
+## Introduction {#sec:Introduction}
+
+In insurance analytics, generalized linear models (GLM) are nowadays  a standard procedure for analyzing claims and customers' decision to renew the policies. For instance, automobile and homeowners pricing is regularly calculated based on models for the number and the size of claims. Some analysts have explored time to event approaches inspired by basic  survival analysis to understand the duration that a customer stays in a company and some insurers have also tried to predict profitability in the long-run. In doing so, it has become evident that there is a trade-off between price and the decision to renew a contract. There is a natural struggle between price and renewal. The higher the price, lower the probabilities to renew the policy. On the other side, if the price is too low than, the policy holder may stay in the company but could not be profitable at the end. Most companies have separated the process of calculating price and renewal prospects. To us, this is a huge mistake and the aim of this case study is to show precisely, why this is so, and why there is a correlation between pricing a renewal, but not a causal relationship. The situation gets specially complicated when there is more than one single policy, for instance when the policy holder has at least one home Insurance and one motor Insurance. This is the reason why we use this particular example to illustrate the joint modelling methodology.
+
+We start with a panel of insureds which at the beginning of the observation  period has one homeowners policy and one motor policy. They are all observed yearly and some abandon the pool at some point because they cancel at least one of those two policies. The study period is five years.
+
+This case study, and the companion paper, considers a joint model of insurance claims and lapsation. For example, if a policyholder is aggressive or a risk seeker (or just careless), then we would expect that customer to have both large auto as well as homeowner claims. As another example, if a policyholder has an auto claim during the year, then we might think that this outcome is related to the decision to renew (or its converse, lapse) an insurance contract because the price of his contract will increase. Using a sample of real data, this case study shows how to predict the size of two types of claims (auto and homeowners) using the Tweedie model. Logistic regression is used for lapse (or renewal) model. The novel aspect is that we specify their joint behavior through a copula. Estimation is done using both a traditional composite likelihood approach as well as a new (in this context) generalized method of moments technique. The models and estimation techniques are built into this demonstration and are not required knowledge in order to review and interactively assess this case study.
+
+
+### Background 
+
+Consider the case where we follow policyholders over time. During the year, there are **three** outcome variables of interest. The claims outcomes are
+
+- $Y_{1}$ which represents claims from an auto coverage and
+
+- $Y_{2}$ which represents claims from a homeowners coverage.
+
+As claims outcomes, these variables may take on value of zero (representing no claim) and are otherwise positive continuous outcomes (representing claim amount). We use subscripts $i$ to distinguish among policyholders and $t$ to distinguish observations over time. Thus, $Y_{1,it}$ and $Y_{2,it}$ represent auto and homeowner claims for the $i$th policyholder at time $t$.
+
+The third random variable, $L$, is a binary variable that represents a policyholder's decision to lapse one of the policies. Specifically, 
+
+-  $L_{it}=1$ indicates that the $i$th policyholder in the $t$th year decides to lapse one of the policies and
+
+-  $L_{it}=0$ indicates that the $i$th policyholder in the $t$th year decides to not lapse the two policies, i.e, to renew.
+
+Note that if $L_{it}=1$ then we do not observe the policy at time $t+1$. In the same way, if $L_{it}=0$, then we observe the policy at time $t+1$, subject to limitations on the number of time periods available. We use $m$ to represent the maximal number of observations over time.
+
+Associated with each policyholder is a set of (possibly time varying) rating variables $\mathbf{x}_{it}$ for the $i$th policyholder at time $t$ that is described in [Section 2](#sec:Summarize). We represent the marginal distribution of each outcome variables in terms of a generalized linear model. Specifically, following standard insurance industry practice, we represent the marginal distributions of the claims random variables using a Tweedie distribution so that the distributions have a mass at zero and are otherwise positive. The marginal distribution of the renewal variable is modeled using a logit function. Marginal distributions may use common rating variables and so are naturally related in this sense.
+
+
+The **dependence** among lapse and claims outcomes is captured using a copula function. That is, we allow outcomes from the same time period (and the same policyholder) to depend on one another. This specification permits, for example, large claims to influence the tendency to lapse a policy or a latent variable to simultaneously influence both lapse and claims outcome. Lapsation dictates the availability of data which may be related to the outcomes, a violation of the statistical principle known as *missing at random*. This means that analyzing claims while ignoring lapse can lead to biased estimation. Thus, joint modeling of lapse and claims are critical because the claims model depends on the data observed through the lapsation/renewal process.
+
+This case study is **interactive** in two ways. First, if you are viewing the .html file in a web browser, you will be able to reveal `R` code and output by clicking on the text. For example, you can click on the `Code` button to get a list of the `R` packages needed to run this case study.
+
+***
+
+
+```{r comment="", eval=FALSE, echo = FALSE}  
+# Loading packages
+# install.packages("tweedie")
+# install.packages("reshape")
+# install.packages("statmod")
+# install.packages("knitr")
+# install.packages("BB")
+# install.packages("MASS")
+# install.packages("numDeriv")
+# install.packages("VineCopula")
+# install.packages("mvtnorm")
+```
+
+
+```{r comment="", message=FALSE, warning=FALSE}  
+# Loading packages
+library(tweedie)
+library(reshape)
+library(statmod)
+library(knitr)
+library(BB)
+library(MASS)
+library(copula)
+library(numDeriv)
+library(VineCopula)
+library(mvtnorm)
+time1 <- Sys.time()  # define a variable that we can use to check the run time
+```
+
+
+
+### Context and Motivation
+
+We consider insurance policy holders together with their claims experience data from a major general insurance company in Spain. The genuine characteristic of these data is that we have information on motor insurance, homeowners insurance and lapse behavior. The observations cover a period of 5 complete years starting in 2010 and ending in mid-2015, but since not all policies start the January 1st we observed one full year from that date. The only requirement to be part of this sample is that all policyholders are covered by one vehicle policy and one homeowner policy. If one of these contracts is cancelled, then the policy holder is not considered in our group and is called a non-renewal or a "lapse". 
+
+We are interested in the dependence of risks, because we assume that there is a relationship between the two coverages, motor and home insurance, but in addition we also believe that having had claims has some relationship with the decision to renew the policy in the next year.
+
+Insurance companies in practice calculate the price to be charged to a customer per line of business and then, if a particular customer has more than one policy, the aggregate price is just the sum of the price of every policy. It is unclear whether there is any reward from having more than one policy, and if there is such bonus, it is generally argued that the rebate is the consequence of a marketing strategy to promote loyalty. Generally, if one client only has one policy, then the price of the insurance contract (i.e. the premium) is calculated based on historical information on this particular line of business in the insurance company. 
+
+In our sample, there may be clients that start their contract later than January 2010, so they are observed less than five years. Some others do not renew one of the policies (either home or motor, or both) and leave the study group.
+
+As in many countries, in Spain owners of automobiles are obliged to have some minimum form of insurance coverage for personal injury to third parties. Home insurance is optional. The reasons why citizens decide to have these two types of insurance may be quite different. So, we believe that our sample of customers having the two is not representative of the whole population, because not everyone selects to buy homeowner coverage or can afford to buy it. Even if ownership is vastly extended in Spain, and one may think that motor and home insurance should go together, home insurance coverage is often linked to a mortgage and, so it is not necessarily sold by the same insurance company that is covering motor insurance. In the recent years, many insurers are trying to cross-sell in their existing portfolios, so they have made an enormous effort to identify and offer a home insurance to those having only motor insurance and the other way around.
+
+We have combined information on three different sources for the sampled individuals. First, the customer characteristics including age, gender or driving experience, among others and dates of renewal for the two types of policies considered here. Note that we have only considered clients corresponding to persons and not commercial firms that can also underwrite home and motor insurance policies. Our segment is personal/private customers. Second, the policy data file for motor vehicle insurance consists of all vehicle insurance coverage including power, driving area or whether there is a second driver that drives the car occasionally. Third, the policy data file for homeowners insurance has information on the property such as value of the building (essentially the value of the home without any furniture, apparel and personal items), location and type of dwelling. Besides these three sources, we have access to data containing information on the number of claims and total cost of those claims per year and per policy type. The claims file provides a record of each accident claim filed with the insurer during the observation period and is linked to the corresponding policy file. The payment file consists of information on payments made during the observation period and is linked to the claims file. However, even if it is frequent that claims have multiple payments made (to health providers, to repair shops, to all parties affected by the claim), we only consider here for each claimed accident the total cost that was compensated by the insurer. A few clients have more than one claim per year per policy. In this case, we consider the sum of all claims in the given policy in a two-step procedure: first we consider the number of claims and then the severity of each claim is added to the aggregate yearly claim compensation of that policy. So, for all policies that are in force, we finally have up to a five year record of the yearly cost of claims in the motor insurance and in the home coverage. If the customer does not renew one of those two policies or both, we do not have more information after this lapse occurs.
+
+Insurers consider non-renewals a critical disruption for their business, because they consider that losing a customer implies that the expected benefits of that client in the short-term and long-term future disappear. Since the basis of insurance is the law of large numbers, insurance companies always seek to increase the number of customers in their portfolios. A high lapsing rate is a threat for their activity, so insurers not only constantly look for new customer, but they also make a great afford to retain those customers that they already have.
+
+Our aim is to price insurance clients with more than one policy type according to the risk they have and to take into account the dependence between the two types of coverage together with the possibility that the client decides to cancel one of them. This is not exactly what insurers do in practice. They evaluate risks in a separate analysis, by traditional claim analysis called ratemaking models, than can even be designed by different people in the insurance company, on the one hand those that are responsible for motor insurance, and on the other those that work on home insurance. The sum of the two prices, which have usually been calculated independently, is the premium to be paid by the client. In some companies, the marketing department, evaluates the risk of non-renewal and may establish rebates that are aimed at keeping the customer in the company. (see, Guelman et al. 2015, for price optimization in only one line of business). Frees and Valdez (2008) analyze more than a single type of claim incurred in motor insurance; for example, an automobile accident can result in damages to a driver's own property, as well as damages to a third party involved in the accident. 
+
+We model the simultaneous occurrence of motor and home claims and the renewal of the two policies together. This is the unique feature in this case study. From a multivariate analysis perspective, this problem is new, because we rarely observed all three phenomena. One of the difficulties is that claims occur during one particular policy-year, while the renewal decision is taken at the end of that policy-year.  Here we show the differences in pricing the two lines separately or jointly. This has many implications in the way the insurance industry can treat the clients with several policies, which are in fact their core clients. We are not shocked to find that claim amounts among motor and home insurance are positively related. It is not surprising that there is a positive association due to wealthy customers that own more expensive cars and more expensive houses have repairs than would be more costly than the rest, but this dependence should already be mostly accounted for in the inclusion of covariates on the power of the car and the value of the house. What we find in our results is that there is a residual dependence that is not captured in the observed risk factors. This positive correlation can be the result of unobserved factors such as carefulness or a general attitude of the customer on risk mitigation. Those that have more accidents and more costly claims in motor insurance tend to coincide with those that have more incidents at home, or those that have more expensive homeowner claim events than the rest. That is an indication of an attitude known as moral hazard, which means that once the policyholder knows that the insurance company compensates for the claims, then the policyholder reduces protection of their goods. What is not yet well understood is the relationship with policy renewal. In the Spanish market we know that claiming induces renewal, due to the fact that the customer cannot find another company. The market is such that companies deny new contracts to new policyholders that recently had a claim, so it is difficult to find a good price elsewhere. What we do not know is whether or not the fact that claims increase implying that renewals also increase makes the companies find an opportunity for a natural diversification. In fact, the larger the claims, the larger are the costs per policy, but in turn, as the odds of renewal increase with claims, the best is the situation of the company in terms of expected benefit.
+
+
+
+
+***
+
+In the following, this report is split into additional sections.
+
+-  [Section 2](#sec:Summarize) on summarizing the data. This section provides basic summary statistics to understand data features.
+-  [Section 3](#sec:FitMarginals) on fitting the marginal distributions. This section provides the usual regression model fitting using Tweedie distributions for claims and a logistic model for lapse. Residuals from the model fits are calculated and used to display patterns among outcomes that are not accounted for in the marginal models.
+-  [Section 4](#sec:Joint) sets the stage for joint estimation.
+    - [Section 4.1](#sec:PLike) on estimation using a pairwise likelihood. A copula (Gaussian) model is specified to accommodate dependencies. This model is fit using pairwise maximum likelihood, as is common in the literature.
+    - [Section 4.2](#sec:GMMFit) using generalized method of moments. This procedure is novel in the copula context.
+-  [Section 5](#sec:Interpret) provides interpretations and implications.
+
+
+
+## Summarize the Data {#sec:Summarize}
+
+```{r}  
+# setwd("D:\\RiskCenter\\DataAnalysisiFrees\\Final_Data_5")
+SampleData <- read.table("data_ex.csv", header =T, sep = ",")
+SampleData$Lapse <-  1*(SampleData$Retention==0)
+SampleData$PosClaim1 <- 1*(SampleData$Claims1>0)
+SampleData$PosClaim2 <- 1*(SampleData$Claims2>0)
+```
+
+
+This section demonstrates some basic techniques to look at the data. 
+
+### Basic Summary Statistics
+
+From the unbalanced panel of policyholders over 5 years, there are $N=$ `r length(SampleData$Retention)` observations in the data set. Of these, there were `r sum((SampleData$Retention==0))` lapses, for a lapse rate of `r round(100*sum((SampleData$Retention==0))/length(SampleData$Retention),2)`%.
+
+For type 1 (auto) claims, we have `r sum(SampleData$Claims1>0)` or about `r round(100*sum(SampleData$Claims1>0)/length(SampleData$Retention),2)`% (positive) claims. For type 2 (home) claims, we have `r sum(SampleData$Claims2>0)` or about `r round(100*sum(SampleData$Claims2>0)/length(SampleData$Retention),2)`% (positive) claims.
+
+As is common, we begin by examining basic measures that summarize the distribution of each variable, initially focus on continuous outcomes.
+
+
+```{r comment="", fig.width=9, fig.height=4, fig.align='center',  tidy = TRUE}  
+VarsDep <- c("Lapse","NClaims1","NClaims2","Claims1","Claims2")
+SumDatDep <- summary(SampleData[VarsDep])
+knitr::kable(SumDatDep,digits=2, caption="Dependent Variable Summary Measures")
+```
+
+
+```{r comment="", fig.width=9, fig.height=4, fig.align='center'}  
+VarsExplan <- c("Age_client","Client_Seniority","Car_power_M",
+                "Insuredcapital_continent_re")
+SumDatExplan <- summary(SampleData[VarsExplan])
+knitr::kable(SumDatExplan,digits=3, caption="Continuous Variable Summary Measures")
+```
+
+
+
+The structure of our problem set-up is complicated. We have three outcome variables, several rating variables, and observe a cross-section of policyholders over time. Analysts encountering data with this structure typically do a far more complete analysis of the basic summary statistics than presented here. The purpose of this section is just to provide a taste of the type of analyses needed at this step. We assume that readers are familiar with these tasks and so proceed to more interesting steps.
+
+Several characteristics are available to explain and predict lapse, as well as the number of claims and their cost. We considered only year, gender (male=1) and age of the customer in this study, but gender is not used in the motor analysis as a covariate due to the fact that gender cannot be used as a rating factor. We also consider client seniority, i.e. the number of years he has been a customer in the company and a binary indicator (metro_code) that indicates the place of residence of the customer (urban or metropolitan versus rural). Some additional covariates included in automobile accident frequency and severity model, namely the power of the car and the presence of a second driver, besides we also consider the payment method which is indicated by a yearly payment versus monthly, which is the baseline. For homeowners' insurance frequency and severity model, we consider the value of the property and the type of property, which is indicated by a binary variable that distinguishes apartment for other types of dwellings like houses or semi-attached houses. 
+
+$$
+\begin{array}{ll}
+\hline
+\text{Variable} & \text{Description} \\
+\hline 
+\text{year} & \\
+\text{gender} & \text{1 for male, 0 for female}\\
+\text{Age client} &\text{age of the customer}\\
+\text{Client Seniority} &\text{the number of years with the company}\\
+\text{metro code} &\text{1 for urban or metropolitan, 0 for rural}\\
+\text{Car power M} &\text{power of the car}\\
+\text{Car 2ndDriver M} &\text{presence of a second driver}\\
+\text{Policy PaymentMethodA} &\text{1 for annual payment, 0 for monthly payment}\\
+\text{Insuredcapital continent re} &\text{value of the property}\\
+\text{appartment} &\text{1 for apartment, 0 for houses or semi-attached houses}\\
+\text{Policy PaymentMethodH} &\text{1 for annual payment, 0 for monthly payment}\\
+\hline
+\end{array}
+$$
+
+Tables can be used to summarize discrete variables.
+
+
+```{r comment="", fig.width=8, fig.height=4, fig.align='center'}  
+# Discrete Variables x1, year and Retention
+XVar = matrix(0,7,2)
+colnames(XVar) <- c("0","1")
+rownames(XVar) <-  c("Retention", "Gender", "Metro Code", "Car Second Driver",
+                     "Apartment", "Policy Payment Method Auto", 
+                     "Policy Payment Method Home")
+XVar[1,] <- 100*table(SampleData$Retention)/nrow(SampleData)
+XVar[2,] <- 100*table(SampleData$gender)/nrow(SampleData)
+XVar[3,] <- 100*table(SampleData$metro_code)/nrow(SampleData)
+XVar[4,] <- 100*table(SampleData$Car_2ndDriver_M)/nrow(SampleData)
+XVar[5,] <- 100*table(SampleData$appartment)/nrow(SampleData)
+XVar[6,] <- 100*table(SampleData$Policy_PaymentMethodA)/nrow(SampleData)
+XVar[7,] <- 100*table(SampleData$Policy_PaymentMethodH)/nrow(SampleData)
+knitr::kable(XVar,digits=2, 
+             caption="Distributions of Binary Explanatory Variables, in Percent")
+```
+
+\scalefont{0.75}
+
+```{r comment="", fig.width=8, fig.height=4, fig.align='center'}  
+# Discrete Variables x1, year and Retention
+XVar = matrix(0,6,6)
+colnames(XVar) <- c("x=0 Lapse","x=1 Lapse", "x=0 PosClaim1","x=1 PosClaim1", 
+                    "x=0 PosClaim2","x=1 PosClaim2")
+rownames(XVar) <-  c("Gender", "Metro Code", "Car Second Driver",
+                     "Apartment", "Policy Payment Method Auto", "Policy Payment Method Home")
+XVar[1,1:2] <- 100*aggregate(Lapse ~ gender, data=SampleData, mean)$Lapse
+XVar[1,3:4] <- 100*aggregate(PosClaim1 ~ gender, data=SampleData, mean)$PosClaim1
+XVar[1,5:6] <- 100*aggregate(PosClaim2 ~ gender, data=SampleData, mean)$PosClaim2
+XVar[2,1:2] <- 100*aggregate(Lapse ~ metro_code, data=SampleData, mean)$Lapse
+XVar[2,3:4] <- 100*aggregate(PosClaim1 ~ metro_code, data=SampleData, mean)$PosClaim1
+XVar[2,5:6] <- 100*aggregate(PosClaim2 ~ metro_code, data=SampleData, mean)$PosClaim2
+XVar[3,1:2] <- 100*aggregate(Lapse ~ Car_2ndDriver_M, data=SampleData, mean)$Lapse
+XVar[3,3:4] <- 100*aggregate(PosClaim1 ~ Car_2ndDriver_M, data=SampleData, mean)$PosClaim1
+XVar[3,5:6] <- 100*aggregate(PosClaim2 ~ Car_2ndDriver_M, data=SampleData, mean)$PosClaim2
+XVar[4,1:2] <- 100*aggregate(Lapse ~ appartment, data=SampleData, mean)$Lapse
+XVar[4,3:4] <- 100*aggregate(PosClaim1 ~ appartment, data=SampleData, mean)$PosClaim1
+XVar[4,5:6] <- 100*aggregate(PosClaim2 ~ appartment, data=SampleData, mean)$PosClaim2
+XVar[5,1:2] <- 100*aggregate(Lapse ~ Policy_PaymentMethodA, data=SampleData, mean)$Lapse
+XVar[5,3:4] <- 100*aggregate(PosClaim1 ~ Policy_PaymentMethodA, data=SampleData, mean)$PosClaim1
+XVar[5,5:6] <- 100*aggregate(PosClaim2 ~ Policy_PaymentMethodA, data=SampleData, mean)$PosClaim2
+XVar[6,1:2] <- 100*aggregate(Lapse ~ Policy_PaymentMethodH, data=SampleData, mean)$Lapse
+XVar[6,3:4] <- 100*aggregate(PosClaim1 ~ Policy_PaymentMethodH, data=SampleData, mean)$PosClaim1
+XVar[6,5:6] <- 100*aggregate(PosClaim2 ~ Policy_PaymentMethodH, data=SampleData, mean)$PosClaim2
+knitr::kable(XVar,digits=2, 
+             caption="Distributions of Outcomes by Binary Explanatory Variables, in Percent")
+```
+ 
+\scalefont{1.3333} 
+
+### Outcomes by Year
+
+You should examine the distribution of outcomes, auto and home claims, as well as lapse, *over time*. After all, the whole point is think about how the availability of observations, as dictated by lapse/renewal, impacts the claims distribution.
+
+For this case study, by design the distribution of the claims frequency and severity is fairly stable over time. The largest type 1 (auto) claim is `r round(max(SampleData$Claims1)/1000,2)` and the largest type 2 (home) claim is `r round(max(SampleData$Claims2)/1000,2)`, both in thousands.
+
+\scalefont{0.9} 
+
+```{r comment="",  eval=TRUE }  
+SumClaims = matrix(0,9,5)
+colnames(SumClaims) <-  c("F2010","F2011","F2012","F2013","F2014")
+rownames(SumClaims) <-  c("Number of Obs","Number of Lapse","% of Lapses",
+                          "Number of Clients with positive Claims 1",
+                          "Average Number of Claim 1","Average cost of Claim 1",
+                          "Clients with positive Claims 2",
+                          "Average Number of Claim 2","Average cost of Claim 2")
+SumClaims[1,] <- aggregate(Lapse ~ year, data=SampleData, length)$Lapse 
+SumClaims[2,] <- aggregate(Lapse ~ year, data=SampleData, sum)$Lapse 
+SumClaims[3,] <- SumClaims[2,]/SumClaims[1,]
+SumClaims[4,] <- aggregate(PosClaim1 ~ year, data=SampleData, sum)$PosClaim1
+SumClaims[5,] <- aggregate(NClaims1 ~ year, data=SampleData, mean)$NClaims1
+SumClaims[6,] <- aggregate(Claims1 ~ year, data=SampleData, sum)$Claims1/SumClaims[4,]
+SumClaims[7,] <- aggregate(PosClaim2 ~ year, data=SampleData, sum)$PosClaim2
+SumClaims[8,] <- aggregate(NClaims2 ~ year, data=SampleData, mean)$NClaims2
+SumClaims[9,] <- aggregate(Claims2 ~ year, data=SampleData, sum)$Claims2/SumClaims[7,]
+knitr::kable(SumClaims,digits=2, caption="Lapse and Claims Summary by Year")
+```
+
+\scalefont{1.1111} 
+
+***
+
+### Dependence Summary Statistics 
+
+
+Of particular interest is the relationship among outcome variables. First, we take a look at the number of observations where a policy has:
+
+-  Type 1: neither an auto nor a home claim
+-  Type 2: an auto but not a home claim
+-  Type 3: not an auto but a home claim
+-  Type 4: both an auto and a home claim
+
+This frequency distribution is given for our simulated data in the table below, followed by the `R` code that generated the table. 
+
+```{r comment="", eval=TRUE}  
+Types = 1*(SampleData$Claims1==0)*(SampleData$Claims2==0)+
+             2*(SampleData$Claims1>0) *(SampleData$Claims2==0)+
+             3*(SampleData$Claims1==0)*(SampleData$Claims2>0)+
+             4*(SampleData$Claims1>0) *(SampleData$Claims2>0)
+table(Types)
+```
+
+
+***
+
+We can also summarize relationships among outcome variables using association measures such as *correlations*. However, our claims variables are a hybrid combination of zeros (for no claims) and long-tailed continuous variables (for positive claim amounts). Although this feature is captured by the Tweedie distribution, it can sometimes be difficult to establish dependence with basic summary statistics. Depending on parameter values, there can be many zeros (`r round(100*sum(SampleData$Claims1==0)/length(SampleData$Retention),2)`% for this data set) and when positive, claims distributions tend to be right skewed. Here is some code that provides **Spearman** correlations, a nonparametric correlation coefficient.
+
+As you experiment with different parameter values, you will find that the more zeros in the data, the more difficult it is to establish dependence with basic techniques. This is interesting because we know that, when generating the data, that important dependencies exist. 
+
+```{r echo=FALSE, eval=TRUE} 
+Vars <- c("Lapse", "Claims1", "Claims2")
+CorDat <- SampleData[Vars]
+CorMat <- cor(CorDat, method="spearman", use="pairwise.complete.obs")
+knitr::kable(CorMat,digits=3, caption="Spearman Outcome Correlations")
+```
+
+***
+
+When summarizing the data, it is sometimes convenient to work in terms of lapse, as this is the event that is of interest to insurers. However, going forward, we work with its complement, renewal ( = one minus lapse). This is slightly more convenient mathematically in that we condition on a policy renewing to examine the claims distribution in subsequent periods.
+
+## Fit the Marginal Distributions {#sec:FitMarginals}
+
+After careful work to summarize data (only a small portion shown here), the next step is fit marginal models. In this context, the descriptor *marginal* means analyzing each outcome without reference to the others. In subsequent sections, we join the marginal models via the copula. 
+
+Marginal model estimation is typically done assuming that each year has the same set of parameters and that observations from different years are independent. This is not necessary but provides a convenient starting point.
+
+### Logistic (Lapse) Regression Results
+
+To model lapse, we employ a simple logistic regression (marginal) model.
+
+```{r comment="", message=FALSE, warning=FALSE, eval = EVALUATE_MARGINALS}
+logistic.fit <- glm(Lapse ~ year+gender+Age_client+
+                  Client_Seniority+metro_code,data=SampleData,
+                  control = glm.control(maxit = 50),family=binomial(link=logit))
+sum.logistic.fit <- summary(logistic.fit)
+knitr::kable(coefficients(sum.logistic.fit),digits=3, 
+             caption="Logistic Lapse Model Summary")
+SampleData$dfLapse <- 1 - logistic.fit$fitted.values 
+              #*(SampleData$Lapse==0) - not correct but makes the code easier later...
+```
+
+*Interpreting the Lapse Marginal Model*
+
+To model lapse, we have employed a simple logistic regression (marginal) model. The interpretation is straightforward. Since the time trend is negative it means that there is a general trend of decreasing lapses from 2010 to 2014, once the other characteristics such as age and gender of the policyholders are controlled. A negative and significant coefficient for Client seniority means that those that stay longer in the company also tend to lapse the policy less than customer that have been in the company less time. Gender (=1 for men) have higher probability to lapse than women. Coefficient for age-client indicates older clients tend to lapse less than younger and the same for length in the company. Urban customers tend to lapse more less than the rest.
+
+
+### Tweedie (Claims) Regression Results
+
+The Tweedie is commonly used in insurance applications for claims. In part, this is because it can be expressed as a generalized linear model.
+
+#### Marginal Auto Model {-}
+
+For type 1 (auto) claims model, we first need to find an initial parameter $p$. In order to make this procedure faster, we work with a random sample and then we proceed to estimate the optimal $p$ with the whole. 
+
+--    We select a random sample of size 10000 and estimate $p$:
+
+```{r comment="", message=FALSE, warning=FALSE, eval = EVALUATE_DOPLOTS}
+# Randomly re-order data - "shuffle it"
+n <- nrow(SampleData)
+set.seed(12347)
+shuffled_SampleData <- SampleData[sample(n), ]
+subset_SampleData <- shuffled_SampleData[1:10000,]
+
+out1 <- tweedie.profile(Claims1 ~year+Age_client+
+                    Client_Seniority+metro_code+Car_power_M+Car_2ndDriver_M+
+                    Policy_PaymentMethodA,data=subset_SampleData,
+                    xi.vec=seq(1.1, 1.6, length=10), do.plot=TRUE)
+out1$xi.max
+```
+
+--    We estimate $p$ with the whole sample and find the optimal $p$ which has minimum deviance. We also find the other parameters by maximum likelihood:
+
+```{r comment="", message=FALSE, warning=FALSE, eval = EVALUATE_MARGINALS}
+funtweedie<-function(p){glm(Claims1 ~year+Age_client+
+                    Client_Seniority+metro_code+Car_power_M+Car_2ndDriver_M+
+                    Policy_PaymentMethodA,data=SampleData,
+                    control = glm.control(maxit = 200),
+                    family=tweedie(var.power=p, link.power=0))$deviance}
+deviance_l_p_sample<-funtweedie(out1$xi.max-0.01)
+deviance_p_sample<-funtweedie(out1$xi.max)
+deviance_u_p_sample<-funtweedie(out1$xi.max+0.01)
+p<-out1$xi.max-0.01
+if(deviance_l_p_sample<deviance_p_sample)
+  {while(deviance_l_p_sample<deviance_p_sample){
+         deviance_p_sample<-deviance_l_p_sample
+         deviance_l_p_sample<-funtweedie(p-0.01)
+         p<-p-0.01}
+} else{ 
+  deviance_p_sample<-funtweedie(out1$xi.max)
+  p<-out1$xi.max+0.01
+   while(deviance_u_p_sample<=deviance_p_sample){
+         deviance_p_sample<-deviance_u_p_sample
+         deviance_u_p_sample<-funtweedie(p+0.01)
+         p<-p+0.01}}
+
+p<-1.766531
+
+tweedie.fit1 <- glm(Claims1 ~year+Age_client+Client_Seniority+
+                    metro_code+Car_power_M+Car_2ndDriver_M+
+                    Policy_PaymentMethodA,data=SampleData,
+                    control = glm.control(maxit = 200),
+                    family=tweedie(var.power=p, link.power=0))
+sum.tweedie.fit1 <- summary(tweedie.fit1)
+knitr::kable(coefficients(sum.tweedie.fit1),digits=3, 
+             caption="Tweedie Claims 1 (Auto) Model Summary")
+dfTweedie1A <- ptweedie(SampleData$Claims1,xi=p,
+    mu=tweedie.fit1$fitted.values,phi=summary(tweedie.fit1)$dis)
+SampleData$dfTweedie1  <- pmin(pmax( 1e-05,dfTweedie1A),.99999)
+```
+
+*Interpreting the Frequency-Severity Marginal Model for Vehicle Insurance Claims*
+
+In the automobile claims marginal model results presented, we find a number of factors that influence significantly the expected claim size per year. We first note a decreasing trend in losses in car insurance. This was expected due to a severe economic crisis in Spain that covers the observed period of time, with much less claims than in previous periods. We find a negative effect of age, which is expected because younger drivers usually have more accidents and more severe accidents than older drivers. The same result holds for power of the car, which means probably safer vehicles, but this factor influence is not significant at the 0.05 level. Vehicles with more than one driver are identified by presence of an occasional second driver, which usually coincides with a younger driver in the household using the car and so, with the existence of more claims. The metro code indicates no differences by area, with lower severity in big cities but this is not significant. Payment method (annual) means less expected claims cost.
+
+#### Marginal Homeowners Model {-}
+
+The type 2 (home) claims model estimation procedure is analogous to the case of motor claims.
+
+--    We select a random sample of size 1000 and estimate $p$:
+
+```{r comment="", message=FALSE, warning=FALSE, eval = EVALUATE_DOPLOTS}
+# Randomly re-order data - "shuffle it"
+n <- nrow(SampleData)
+set.seed(12347)
+shuffled_SampleData <- SampleData[sample(n), ]
+subset_SampleData <- shuffled_SampleData[1:1000,]
+
+out2 <- tweedie.profile(Claims2 ~year+Age_client+Client_Seniority+metro_code+
+                      Insuredcapital_continent_re+appartment+
+                      Policy_PaymentMethodH,data=subset_SampleData,
+                      xi.vec=seq(1.1, 1.9, length=10), do.plot=TRUE)
+out2$xi.max 
+```
+
+--    As in the case of motor insurance, we find the optimal $p$ with the whole sample and then estimate the other parameters.
+
+```{r comment="", message=FALSE, warning=FALSE, eval = EVALUATE_MARGINALS}
+funtweedie<-function(p){glm(Claims2 ~year+Age_client+
+                              Client_Seniority+metro_code+
+                      Insuredcapital_continent_re+appartment+
+                        Policy_PaymentMethodH,data=SampleData,
+                    control = glm.control(maxit = 200),
+                    family=tweedie(var.power=p, link.power=0))$deviance}
+deviance_l_p_sample<-funtweedie(out2$xi.max-0.01)
+deviance_p_sample<-funtweedie(out2$xi.max)
+deviance_u_p_sample<-funtweedie(out2$xi.max+0.01)
+p<-out2$xi.max-0.01
+if(deviance_l_p_sample<deviance_p_sample)
+  {while(deviance_l_p_sample<deviance_p_sample){
+         deviance_p_sample<-deviance_l_p_sample
+         deviance_l_p_sample<-funtweedie(p-0.01)
+         p<-p-0.01}
+} else{ 
+  deviance_p_sample<-funtweedie(out2$xi.max)
+  p<-out2$xi.max+0.01
+   while(deviance_u_p_sample<=deviance_p_sample){
+         deviance_p_sample<-deviance_u_p_sample
+         deviance_u_p_sample<-funtweedie(p+0.01)
+         p<-p+0.01}}
+p<-1.705238
+
+tweedie.fit2 <- glm(Claims2 ~year+Age_client+Client_Seniority+metro_code+
+                      Insuredcapital_continent_re+appartment+
+                      Policy_PaymentMethodH,data=SampleData,
+                    control = glm.control(maxit = 200),
+                    family=tweedie(var.power=p, link.power=0))
+sum.tweedie.fit2 <- summary(tweedie.fit2)
+knitr::kable(coefficients(sum.tweedie.fit2),digits=3, 
+             caption="Tweedie Claims 2 (Home) Model Summary")
+dfTweedie2A <- ptweedie(SampleData$Claims2,xi=p,
+            mu=tweedie.fit2$fitted.values,phi=summary(tweedie.fit2)$dis)
+SampleData$dfTweedie2  <- pmin(pmax( 1e-05,dfTweedie2A),.99999)
+```
+
+
+*Interpreting the Frequency-Severity Marginal Model for Home Insurance Claims*
+
+The results of the marginal model for the homeowners insurance claims model also show a decreasing year trend but non-significant. Only the effect of Insuredcapital_continent re is positive meaning that the cost of claims is larger for more expensive homes.  Apartments compared to other types of homes have also a tendency to have larger claims. In this model compared to motor insurance there are several additional comments. The age of the client has a positive effect, which means that the older the client the larger the expected size of future claims. Payment method (annual) means also implies less expected claims cost.
+
+
+### Residual Checking
+
+As with all model estimation procedures, it is good standard practice to check model assumptions via an examination of the residuals. For generalized linear models, one typically examines **deviance residuals**. The following provides an example of a standard set of diagnostic plots based on the deviance residuals.
+
+
+***
+
+<h6 style="text-align: center;"><a id="displayresids" href="javascript:togglecode('toggleresids','displayresids');"><i><strong>Click Here to Show Residual Plots</strong></i></a> </h6>
+<div id="toggleresids" style="display: none">
+
+```{r comment="", fig.width=6, fig.height=4, fig.align='center', eval = EVALUATE_MARGINALS}  
+par(mfrow=c(2, 2))
+#plot(tweedie.fit1) #not plotted to reduce filesize
+
+```
+
+```{r comment="", fig.width=6, fig.height=4, fig.align='center', eval = EVALUATE_MARGINALS}  
+par(mfrow=c(2, 2))
+#plot(tweedie.fit2) #not plotted  to reduce filesize
+
+```
+
+```{r echo=FALSE, eval = EVALUATE_MARGINALS}
+pnames <- c("Lapse", "Claims 1 Resids", "Claims 2 Resids")
+Vars <- c("dfLapse", "dfTweedie1", "dfTweedie2")
+CorDat <- SampleData[Vars]
+CorMat <- cor(CorDat, method="spearman", use="pairwise.complete.obs")
+colnames(CorMat) <- rownames(CorMat) <- pnames
+knitr::kable(CorMat,digits=3, caption="Spearman Correlations")
+```
+
+</div>
+
+
+Standard residual plots from the Tweedie model can be difficult to assess due to mass at zero. Another type of residual can be calculated via the **probability integral transform**. That is, if $Y$ is a random variable with distribution function $F$, then $F(Y)$ has a uniform distribution. We can use this relationship to assess quality of our identification of the distribution. Like the deviance residuals, this relationship breaks down in the presence of mass points, e.g. zeros, but can still be used to supplement the usual diagnostic modeling checking. We refer to these as **Cox Snell** residuals.
+
+
+##Joint Model Specification {#sec:Joint}
+
+
+####R Code for Data Preparation {-}
+
+This code separates the data into different subsets needed for likelihood calculations. The subsets include lapse and no lapse, as well as four different claim outcomes: (i) no auto/home claim, (ii) an but no home claim, (iii) no auto but a home claim, and (iv) an auto and a home claim.
+
+```{r eval = EVALUATE_MARGINALS}
+# Reshape the data
+TweedieLike1 <- SampleData[order(-SampleData$PolID, SampleData$year),]
+VarsLike    <- c("PolID", "year", "Lapse", "dfLapse", 
+                   "Claims1","dfTweedie1","Claims2","dfTweedie2")
+TweedieLike <- TweedieLike1[VarsLike]
+calcOrder   <- 1:nrow(TweedieLike)
+# These are the four cases from the hybrid joint mass/density function
+caset1t2 <- 1*(TweedieLike$Claims1==0)*(TweedieLike$Claims2==0)+
+              2*(TweedieLike$Claims1>0) *(TweedieLike$Claims2==0)+
+              3*(TweedieLike$Claims1==0)*(TweedieLike$Claims2>0)+
+              4*(TweedieLike$Claims1>0) *(TweedieLike$Claims2>0)
+u  <- as.matrix(cbind(TweedieLike$dfLapse,TweedieLike$dfTweedie1,TweedieLike$dfTweedie2))
+zu <- qnorm(u)
+mydata <- data.frame(caset1t2,u,zu,calcOrder,TweedieLike$Lapse)
+names(mydata) <- c("caset1t2","u1","u2","u3","zu1","zu2","zu3","calcOrder","Lapse")
+mydataLapse   <- mydata[which(mydata$Lapse==1),]
+mydataNoLapse <- mydata[which(mydata$Lapse==0),]
+mydata1 <- mydata[which(caset1t2==1),]
+mydata2 <- mydata[which(caset1t2==2),]
+mydata3 <- mydata[which(caset1t2==3),]
+mydata4 <- mydata[which(caset1t2==4),]
+
+```
+
+### Pairwise Likelihood Estimation {#sec:PLike}
+
+
+####R Code for Pairwise Likelihood Calculation {-}
+
+In the following pairwise likelihood calculations, we drop the marginal densities $f_2(y)$ as they contain no information about the dependence parameters. See the documentation for the R package `VineCopula` for explanations of the functions to evaluate bivariate copulas and their derivatives.
+
+```{r comment="", message=FALSE, warning=TRUE,  tidy = TRUE}
+NegBivariateLikelihood <- function(rho,type) {
+    bilikehd <- 0*calcOrder
+    if (nrow(mydataNoLapse)>0) {
+      dat <-  mydataNoLapse
+      u <- (type==1)*dat$u2+(type==2)*dat$u3
+      ClaimInd <- 1*(dat$caset1t2==4)+1*(dat$caset1t2==2)*(type==1)+1*(dat$caset1t2==3)*(type==2)
+      ZeroLike <- as.matrix(BiCopCDF(dat$u1,u, family=1, par=rho),ncol=1)
+      PosLike  <-  as.matrix(BiCopHfunc2(dat$u1,u, family=1, par=rho),ncol=1)
+       bilikehd[dat$calcOrder] <- (ClaimInd==0)*ZeroLike + (ClaimInd>0)*PosLike
+    }
+    if (nrow(mydataLapse)>0) {
+      dat <-  mydataLapse 
+      u <- (type==1)*dat$u2+(type==2)*dat$u3
+      ClaimInd <- 1*(dat$caset1t2==4)+1*(dat$caset1t2==2)*(type==1)+1*(dat$caset1t2==3)*(type==2)
+      ZeroLike <- u-as.matrix(BiCopCDF(dat$u1,u, family=1, par=rho),ncol=1)
+      PosLike  <- 1-as.matrix(BiCopHfunc2(dat$u1,u, family=1, par=rho),ncol=1)      
+      bilikehd[dat$calcOrder] <- (ClaimInd==0)*ZeroLike + (ClaimInd>0)*PosLike
+      }
+    bilikehd[is.na(bilikehd)] <- 0
+    bilikehd <-   pmin(pmax(1e-12,bilikehd),1e12)
+    return(-sum(log(bilikehd)))
+}
+
+BiLikeLA<-function(rho){return(NegBivariateLikelihood(rho,1))}
+BiLikeLH<-function(rho){return(NegBivariateLikelihood(rho,2))}
+
+```
+
+
+```{r comment="", message=FALSE, warning=TRUE}
+BiLikeAH <- function(rho) {
+  # See the VineCopula package 
+  #  for the functions 'BiCopCDF', 'BiCopHfunc', and 'BiCopPDF'
+     likehd <- 0*calcOrder
+  if (nrow(mydata1)>0) {likehd[mydata1$calcOrder] <-
+    BiCopCDF(mydata1$u2,mydata1$u3, family=1, par=rho)
+  }
+  if (nrow(mydata2)>0) {likehd[mydata2$calcOrder] <-
+    BiCopHfunc1(mydata2$u2,mydata2$u3, family=1, par=rho)
+  }
+  if (nrow(mydata3)>0) {likehd[mydata3$calcOrder] <-
+    BiCopHfunc2(mydata3$u2,mydata3$u3, family=1, par=rho)
+  }
+  if (nrow(mydata4)>0) {likehd[mydata4$calcOrder] <- 
+    BiCopPDF(mydata4$u2,mydata4$u3, family=1, par=rho)
+  }
+    likehd <-   pmin(pmax(1e-12,likehd),1e12)
+    return(-sum(log(likehd)))
+}
+
+```
+
+#### Pairwise Likelihood Estimation Results {-}
+
+
+
+```{r comment="", message=FALSE, warning=TRUE, eval = EVALUATE_PL}
+toler     <- 0.4
+opLA <- optim(0,BiLikeLA,method=c("L-BFGS-B"),
+              lower=-toler,upper=toler,hessian=TRUE)
+PairSELA <- sqrt(diag(ginv(opLA$hessian)))
+opLH <- optim(0,BiLikeLH,method=c("L-BFGS-B"),
+              lower=-toler,upper=toler,hessian=TRUE)
+PairSELH <- sqrt(diag(ginv(opLH$hessian)))
+opAH <- optim(0,BiLikeAH,method=c("L-BFGS-B"),
+              lower=-toler,upper=toler,hessian=TRUE)
+PairSEAH <- sqrt(diag(ginv(opAH$hessian)))
+
+PairEst<-rbind(opLA$par,opLH$par,opAH$par)
+PairSE<-rbind(PairSELA,PairSELH,PairSEAH)
+
+EstResults <- cbind(PairEst,PairSE) 
+rownames(EstResults) <- c("Lapse-Auto","Lapse-Home","Auto-Home")
+colnames(EstResults) <- c("Estimate","Std Error")
+knitr::kable(EstResults,digits=4, 
+             caption="Pairwise Likelihood Estimation Results")
+```
+
+### Generalized Method of Moments Estimation {#sec:GMM}
+
+####R Code for GMM Functions {-}
+
+Top level functions are here.
+
+```{r comment="", message=FALSE, warning=TRUE} 
+GMMgthetaFunct<- function(param) {
+  Scores <- data.frame(GMMScore(param)[,c(2:4)]) 
+  names(Scores) <- c("Score12", "Score13", "Score23")
+  return(as.matrix(Scores))
+}
+
+GMMFunc<- function(param) {
+  GMMgtheta <- GMMgthetaFunct(param)
+  GMMScorex <- t(colSums(GMMgtheta)) %*% 
+                 ginv(Vargtheta) %*% colSums(GMMgtheta) / length(GMMgtheta[,1])
+  return(GMMScorex)
+}
+```
+
+
+####R Code for GMM Scores {-}
+
+The likelihood and scores corresponding to all outcomes are calculated here. It uses as input the following subsection that provides calculations only for the trivariate piece. The function returns the likelihood and three scores (corresponding to the three association parameters).
+
+
+```{r  tidy = TRUE}
+GMMScore <- function(param) {
+  rhoLA <- param[1];  rhoLH <- param[2];  rhoAH_L <- param[3]
+  # Transformed parameter
+  rhoAH <- rhoLA*rhoLH + rhoAH_L*sqrt( (1-rhoLA^2)*(1-rhoLH^2) )
+  rhoLA <- pmin(pmax(-.99,rhoLA),.99)
+  rhoLH <- pmin(pmax(-.99,rhoLH),.99)
+  rhoAH <- pmin(pmax(-.99,rhoAH),.99)
+  SigmaList <- SigmaFct(rhoLA,rhoLH,rhoAH);Sigma <- SigmaList[[1]]
+  Sigma12   <- SigmaList[[2]];Sigma13   <- SigmaList[[3]];Sigma23   <- SigmaList[[4]]
+  Sigma13.2 <- SigmaList[[5]];Sigma12.3 <- SigmaList[[6]];Sigma23.1 <- SigmaList[[7]]
+  Sigma3.12 <- SigmaList[[8]];Sigma1.23 <- SigmaList[[9]];Sigma2.13 <- SigmaList[[10]]
+  
+  vec111 <- as.vector(cbind(1,1,1));vec001 <- as.vector(cbind(0,0,1))
+  ScoreLike <- matrix(0,length(mydata[,1]),4)
+  # (Auto=0,Home=0) Case
+  if (nrow(mydata1)>0) {
+    dat <- mydata1
+    Reten0 <- 1-dat$Lapse
+    score <- GMMScore00(rhoLA,rhoLH,rhoAH,dat$u1,dat$u2,dat$u3)
+    fbb <- score[,2:4]
+    Fbb <- as.matrix(score[,1],ncol=1)            %*% vec111
+    Fbb[,1] <- pmax(1e-05,Fbb[,1]);Fbb[,2] <- pmax(1e-05,Fbb[,2]); Fbb[,3] <- pmax(1e-05,Fbb[,3])  
+    faa <- as.matrix(dmvnorm(cbind(dat$zu2,dat$zu3), mean=rep(0, 2), sigma=Sigma23, log=FALSE),ncol=1) %*% vec001
+    Faa <- as.matrix(BiCopCDF(dat$u2,dat$u3, family=1, par=rhoAH),ncol=1)                              %*% vec111
+    Faa_Fbb <- pmin(pmax(1e-05,(Faa-Fbb)[,1]),0.99999)
+    ScoreLike[dat$calcOrder,1]   <- Reten0*log(Fbb)[,1] + (1-Reten0)*log(Faa_Fbb)   
+    ScoreLike[dat$calcOrder,2:4] <- Reten0*fbb/Fbb      + (1-Reten0)*(faa-fbb)/Faa_Fbb
+  }
+  # (Auto=1,Home=0) Case
+  if (nrow(mydata2)>0) {
+    dat <- mydata2
+    Reten0 <- 1-dat$Lapse
+    score <- GMMScore10(rhoLA,rhoLH,rhoAH,dat$u1,dat$u2,dat$u3)
+    fbb <- score[,2:4]
+    Fbb <- as.matrix(score[,1],ncol=1) %*% vec111 
+    Fbb[,1] <- pmax(1e-05,Fbb[,1]);Fbb[,2] <- pmax(1e-05,Fbb[,2]); Fbb[,3] <- pmax(1e-05,Fbb[,3])  
+    faa <- as.matrix(BiCopHfuncDeriv(dat$u3,dat$u2, family=1, par=rhoAH),ncol=1)            %*% vec001
+    Faa <- as.matrix(BiCopHfunc1(dat$u2,dat$u3, family=1, par=rhoAH),ncol=1)                %*% vec111
+    Faa_Fbb <- pmin(pmax(1e-05,(Faa-Fbb)[,1]),0.99999)
+    ScoreLike[dat$calcOrder,1]   <- Reten0*log(Fbb)[,1] + (1-Reten0)*log(Faa_Fbb)  
+    ScoreLike[dat$calcOrder,2:4] <- Reten0*fbb/Fbb      + (1-Reten0)*(faa-fbb)/Faa_Fbb
+  }
+  # (Auto=0,Home=1) Case
+  if (nrow(mydata3)>0) {
+    dat <- mydata3
+    Reten0 <- 1-dat$Lapse
+    score <- GMMScore01(rhoLA,rhoLH,rhoAH,dat$u1,dat$u2,dat$u3)
+    fbb <- score[,2:4]
+    Fbb <- as.matrix(score[,1],ncol=1) %*% vec111
+    Fbb[,1] <- pmax(1e-05,Fbb[,1]);Fbb[,2] <- pmax(1e-05,Fbb[,2]); Fbb[,3] <- pmax(1e-05,Fbb[,3])  
+    faa <- as.matrix(BiCopHfuncDeriv(dat$u2,dat$u3, family=1, par=rhoAH),ncol=1)            %*% vec001
+    Faa <- as.matrix(BiCopHfunc2(dat$u2,dat$u3, family=1, par=rhoAH),ncol=1)                 %*% vec111
+    Faa_Fbb <- pmin(pmax(1e-05,(Faa-Fbb)[,1]),0.99999)
+    ScoreLike[dat$calcOrder,1]   <- Reten0*log(Fbb)[,1] + (1-Reten0)*log(Faa_Fbb)   
+    ScoreLike[dat$calcOrder,2:4] <- Reten0*fbb/Fbb      + (1-Reten0)*(faa-fbb)/Faa_Fbb
+  }
+  # (Auto=1,Home=1) Case
+  if (nrow(mydata4)>0) {
+    dat <- mydata4
+    Reten0 <- 1-dat$Lapse
+    score <- GMMScore11(rhoLA,rhoLH,rhoAH,dat$u1,dat$u2,dat$u3)
+    fbb <- score[,2:4]
+    Fbb <- as.matrix(score[,1],ncol=1) %*% vec111 
+    Fbb[,1] <- pmax(1e-05,Fbb[,1]);Fbb[,2] <- pmax(1e-05,Fbb[,2]); Fbb[,3] <- pmax(1e-05,Fbb[,3])  
+    faa <- as.matrix(BiCopDeriv(pnorm(dat$zu2),pnorm(dat$zu3), family=1, par=rhoAH),ncol=1) %*% vec001
+    Faa <- as.matrix(BiCopPDF(dat$u2,dat$u3, family=1, par=rhoAH),ncol=1)                   %*% vec111
+    Faa_Fbb <- pmin(pmax(1e-05,(Faa-Fbb)[,1]),0.99999)
+    ScoreLike[dat$calcOrder,1] <-   Reten0*log(Fbb)[,1] + (1-Reten0)*log(Faa_Fbb)  
+    ScoreLike[dat$calcOrder,2:4] <- Reten0*fbb/Fbb      + (1-Reten0)*(faa-fbb)/Faa_Fbb
+  }
+  return(ScoreLike)
+}
+
+```
+
+####R Code for Basic GMM Score Functions {-}
+
+The likelihood and scores corresponding to trivariate outcomes are calculated here. This has four functions corresponding to our four data cases: (i) (Auto=0,Home=0), (ii) (Auto=1,Home=0), (iii) (Auto=0,Home=1), and (iv) (Auto=1,Home=1). Each function returns the likelihood and three scores (corresponding to the three association parameters).
+
+```{r  }
+# (Auto=0,Home=0) Case
+GMMScore00 <- function(rho12,rho13,rho23,u1,u2,u3){
+  norm.cops  <- normalCopula(param=c(rho12,rho13,rho23), dispstr="un", dim=3)
+  like <- pCopula(cbind(u1,u2,u3), copula=norm.cops, algorithm=TVPACK(abseps=1e-8))
+  like <- pmin(pmax(1e-05,like),.99999)
+  
+  zu1 <- as.vector(qnorm(u1));zu2 <- as.vector(qnorm(u2));zu3 <- as.vector(qnorm(u3))
+  SigmaList <- SigmaFct(rho12,rho13,rho23);
+  Sigma <- SigmaList[[1]]
+  Sigma12   <- SigmaList[[2]];
+  Sigma13 <- SigmaList[[3]];
+  Sigma23 <- SigmaList[[4]];
+  Sigma3.12 <- SigmaList[[8]];
+  Sigma1.23 <- SigmaList[[9]];
+  Sigma2.13 <- SigmaList[[10]]
+  
+  zstar12 <- zu3 - as.matrix(cbind(zu1,zu2))%*%ginv(Sigma12)%*%Sigma[c(1,2),3]
+  score12 <- dmvnorm(cbind(zu1,zu2),mean=rep(0,2),sigma=Sigma12,log=FALSE) *
+                  pnorm(zstar12, sd=sqrt(Sigma3.12))
+  zstar13 <- zu2 - as.matrix(cbind(zu1,zu3))%*%ginv(Sigma13)%*%Sigma[c(1,3),2]
+  score13 <- dmvnorm(cbind(zu1,zu3),mean=rep(0,2),sigma=Sigma13,log=FALSE) *
+                  pnorm(zstar13,sd=sqrt(Sigma2.13))
+  zstar23 <- zu1 - as.matrix(cbind(zu2,zu3))%*%ginv(Sigma23)%*%Sigma[c(2,3),1]
+  score23 <- dmvnorm(cbind(zu2,zu3),mean=rep(0,2),sigma=Sigma23,log=FALSE) *
+                  pnorm(zstar23,sd=sqrt(Sigma1.23))
+  return(cbind(like,score12,score13,score23)) 
+}
+
+# (Auto=1,Home=0) Case
+GMMScore10 <- function(rho12,rho13,rho23,u1,u2,u3){
+  zu1 <- as.vector(qnorm(u1));zu2 <- as.vector(qnorm(u2));zu3 <- as.vector(qnorm(u3))
+  sig1 <- sqrt(1-rho12^2)
+  sig2 <- sqrt(1-rho23^2)
+  rhox <- (rho13-rho12*rho23)/(sig1*sig2)
+  rhox <- pmin(pmax(-.999,rhox),.999)
+  z1s  <- (zu1 -zu2*rho12)/sig1
+  z3s  <- (zu3 -zu2*rho23)/sig2
+  like <- BiCopCDF(pnorm(z1s),pnorm(z3s), family=1, par=rhox)  
+  like <- pmin(pmax(1e-05,like),.99999)
+  
+  rhoxMat <- matrix(c(1,rhox,rhox,1),nrow=2,ncol=2)
+  scoreAiii <- dmvnorm(cbind(z1s,z3s),mean=rep(0,2),sigma=rhoxMat,log=FALSE)
+  score13 <- 0  + 0 + scoreAiii/(sig1*sig2)
+  score12 <- bideriv1(z1s,z3s,rhox)*(zu1*rho12-zu2)/sig1^3  + 0 +
+                   scoreAiii*(rho12*rho13-rho23)/(sig1^3*sig2)
+  score23 <- 0  + bideriv1(z3s,z1s,rhox)*(zu3*rho23-zu2)/sig2^3 +
+                  scoreAiii*(rho13*rho23-rho12)/(sig1*sig2^3)
+  return(cbind(like,score12,score13,score23)) 
+}
+
+# Helpful Function
+bideriv1 <- function(x1,x2,rhox)
+  {return(dnorm(x1)*pnorm((x2-rhox*x1)/sqrt(1-rhox^2))) }
+
+# (Auto=0,Home=1) Case
+GMMScore01 <- function(rho12,rho13,rho23,u1,u2,u3){
+  zu1 <- as.vector(qnorm(u1));
+  zu2 <- as.vector(qnorm(u2));
+  zu3 <- as.vector(qnorm(u3))
+  sig1 <- sqrt(1-rho13^2)
+  sig2 <- sqrt(1-rho23^2)
+  rhox <- (rho12-rho13*rho23)/(sig1*sig2)
+  rhox <- pmin(pmax(-.999,rhox),.999)
+  z1s  <- (zu1 -zu3*rho13)/sig1
+  z2s  <- (zu2 -zu3*rho23)/sig2
+  like <- BiCopCDF(pnorm(z1s),pnorm(z2s),family=1,par=rhox)  
+  like <- pmin(pmax(1e-05,like),.99999)
+  
+  rhoxMat   <-  matrix(c(1,rhox,rhox,1),nrow=2,ncol=2)
+  scoreAiii <- dmvnorm(cbind(z1s,z2s), mean=rep(0, 2), sigma=rhoxMat, log=FALSE)
+  score12   <- 0  + 0 + scoreAiii/(sig1*sig2)
+  score13   <- bideriv1(z1s,z2s,rhox)*(zu1*rho13-zu3)/sig1^3  + 0 +
+                 scoreAiii*(rho12*rho13-rho23)/(sig1^3*sig2)
+  score23   <- 0  + bideriv1(z2s,z1s,rhox)*(zu2*rho23-zu3)/sig2^3 +
+                 scoreAiii*(rho12*rho23-rho13)/(sig1*sig2^3)
+  return(cbind(like,score12,score13,score23)) 
+}  
+# (Auto=1,Home=1) Case
+GMMScore11 <- function(rho12,rho13,rho23,u1,u2,u3){
+  zu1 <- as.vector(qnorm(u1));
+  zu2 <- as.vector(qnorm(u2));
+  zu3 <- as.vector(qnorm(u3))
+  SigmaList <- SigmaFct(rho12,rho13,rho23);
+  Sigma <- SigmaList[[1]]
+  Sigma12   <- SigmaList[[2]];
+  Sigma13 <- SigmaList[[3]];
+  Sigma23 <- SigmaList[[4]];
+  Sigma13.2 <- SigmaList[[5]];
+  Sigma12.3 <- SigmaList[[6]];
+  Sigma23.1 <- SigmaList[[7]];
+  Sigma3.12 <- SigmaList[[8]];
+  Sigma1.23 <- as.numeric(SigmaList[[9]]);
+  Sigma2.13 <- SigmaList[[10]]
+  tempSig   <- ginv(Sigma[2:3,2:3])
+  mu1.23    <- cbind(zu2,zu3) %*% tempSig %*% Sigma[1,2:3]
+  z1s  <- (zu1 - as.vector(mu1.23))/as.numeric(sqrt(Sigma1.23))
+  like <- pnorm(z1s)*BiCopPDF(u2,u3, family=1, par=rho23)
+  like <- pmax(1e-05,like)
+  
+  partialCop1 <- -dnorm(z1s)/Sigma1.23^(3/2)
+  mu1.231 <- as.vector(cbind(zu2,zu3) %*% tempSig %*% as.vector(c(1,0)))
+  mu1.232 <- as.vector(cbind(zu2,zu3) %*% tempSig %*% as.vector(c(0,1)))
+  mu1.233 <- -as.vector(cbind(zu2,zu3) %*% tempSig %*% 
+                  matrix(c(0,1,1,0),nrow=2,ncol=2) %*% tempSig %*% Sigma[1,2:3])
+  
+  sig1.231 <- as.numeric(-2*Sigma[2:3,1] %*% tempSig %*% as.vector(c(1,0)))
+  sig1.232 <- as.numeric(-2*Sigma[2:3,1] %*% tempSig %*% as.vector(c(0,1)))
+  sig1.233 <- as.numeric(Sigma[2:3,1] %*% tempSig %*% 
+                  matrix(c(0,1,1,0),nrow=2,ncol=2) %*% tempSig %*% Sigma[1,2:3])
+  
+  partialCop12 <- partialCop1*(Sigma1.23*mu1.231+0.5*(zu1-mu1.23)*sig1.231)
+  partialCop13 <- partialCop1*(Sigma1.23*mu1.232+0.5*(zu1-mu1.23)*sig1.232)
+  partialCop23 <- partialCop1*(Sigma1.23*mu1.233+0.5*(zu1-mu1.23)*sig1.233)
+  
+  score12 <- 0  + partialCop12*BiCopPDF(u2,u3, family=1, par=rho23)
+  score13 <- 0  + partialCop13*BiCopPDF(u2,u3, family=1, par=rho23)                
+  score23 <- pnorm(z1s)*BiCopDeriv(u2,u3,family=1,par=rho23,deriv="par",log=FALSE) +
+                    partialCop23*BiCopPDF(u2,u3, family=1, par=rho23) 
+  return(cbind(like,score12,score13,score23)) 
+}
+```
+
+####R Code for Matrices of Association Parameters {-}
+
+```{r  }
+SigmaFct <- function(rho12,rho13,rho23){
+  Sigma <- matrix(c(1,rho12,rho13,  rho12,1,rho23, rho13,rho23,1),
+                  nrow=3,ncol=3)
+  Sigma12   <- Sigma[c(1,2),c(1,2)]
+  Sigma13   <- Sigma[c(1,3),c(1,3)]
+  Sigma23   <- Sigma[c(2,3),c(2,3)]
+  Sigma13.2 <- Sigma[c(1,3),c(1,3)]-Sigma[c(1,3),2] %*% t(Sigma[c(1,3),2]) 
+  Sigma12.3 <- Sigma[c(1,2),c(1,2)]-Sigma[c(1,2),3] %*% t(Sigma[c(1,2),3])  
+  Sigma23.1 <- Sigma[c(2,3),c(2,3)]-Sigma[c(2,3),1] %*% t(Sigma[c(2,3),1])
+  Sigma3.12 <- 1-Sigma[3,1:2] %*% ginv(Sigma[1:2,1:2]) %*% Sigma[3,1:2]
+  Sigma1.23 <- 1-Sigma[1,2:3] %*% ginv(Sigma[2:3,2:3]) %*% Sigma[1,2:3]
+  Sigma2.13 <- 1-Sigma[2,c(1,3)] %*% ginv(Sigma[c(1,3),c(1,3)]) %*% Sigma[2,c(1,3)]
+  Sigma3.12 <- Sigma3.12*(Sigma3.12>0)
+  Sigma1.23 <- Sigma1.23*(Sigma1.23>0)
+  Sigma2.13 <- Sigma2.13*(Sigma2.13>0)
+  list(Sigma,Sigma12,Sigma13,Sigma23,Sigma13.2,
+       Sigma12.3,Sigma23.1,Sigma3.12,Sigma1.23,Sigma2.13)
+}
+
+```
+
+#### GMM Estimation Results {-}
+
+```{r eval = EVALUATE_GMM}
+# GMMInit <- c(0,0,0)
+GMMInit  <- c(opLA$par,opLH$par,opAH$par)
+toler = .1
+lowerbd <- GMMInit - toler
+upperbd <- GMMInit + toler
+GMMgthetaInit <- GMMgthetaFunct(GMMInit)
+GMMInitdev <- GMMgthetaInit - 
+              matrix(1, nrow=length(GMMgthetaInit[,1]),ncol=1) %*%  
+              colMeans(GMMgthetaInit)
+Vargtheta  <- t(GMMInitdev) %*% GMMInitdev / length(GMMgthetaInit[,1])
+GMMResult2 <- optim(par=GMMInit,GMMFunc,method=c("L-BFGS-B"),
+                    lower=lowerbd,upper=upperbd,control=list(factr=10^12))
+GMMEst     <- GMMResult2$par  
+# Standard Error
+# Adjustments for Reparameterization
+GTransform <- matrix(c(1,0,0,0,1,0,
+               GMMEst[2]-GMMEst[1]*GMMEst[3]*sqrt( (1-GMMEst[2]^2)/(1-GMMEst[1]^2) )  ,
+               GMMEst[1]-GMMEst[2]*GMMEst[3]*sqrt( (1-GMMEst[1]^2)/(1-GMMEst[2]^2) )  ,
+               sqrt( (1-GMMEst[1]^2)*(1-GMMEst[2]^2) ) ) ,
+               nrow=3,ncol=3)
+GMMgthetaSumFunct<- function(param) { colSums(GMMgthetaFunct(param))  }
+gradient   <- jacobian(func=GMMgthetaSumFunct,GMMEst, 
+                       method="simple",method.args=list(eps=5e-3))
+GMMgtheta  <- GMMgthetaFunct(GMMEst)
+Vargtheta  <- t(GMMgtheta) %*% GMMgtheta / length(GMMgtheta[,1])
+GMMVar     <- t(gradient) %*% ginv(Vargtheta) %*% gradient / length(GMMgtheta[,1])
+TransformGMMVar <- t(GTransform) %*% ginv(GMMVar) %*% GTransform
+tryCatch(GMMstderror <- sqrt(diag(TransformGMMVar)) , 
+              error=function(e) {GMMstderror <- 0*TransformGMMVar})
+GMMEst[3] <- GMMEst[1]*GMMEst[2] + GMMEst[3]*sqrt( (1-GMMEst[1]^2)*(1-GMMEst[2]^2) ) 
+EstResults1 <- cbind(PairEst,PairSE,GMMEst,GMMstderror) 
+
+rownames(EstResults1) <- c("Lapse-Auto","Lapse-Home","Auto-Home")
+colnames(EstResults1) <- c("Like Est","Like Std Error", "GMM Est", "GMM Std Error")
+knitr::kable(EstResults1,digits=6, caption="GMM Estimation Results")
+```
+
+## Interpretations and Implications {#sec:Interpret}
+
+
+### Correlations
+
+The new important result is that the correlations between the predictions is significant for all three pairs. All pair-wise correlations significantly are different from zero with the GMM method and with maximum likelihood. The ML estimation and the GMM provide very similar results for the parameter and for their corresponding standard errors. These correlations must be interpreted as a dependence structure under the joint model estimation. The correlation between lapse and auto claims is positive and large. The correlation between lapse and home is also positive and about half its size as the correlation between lapse and automobile insurance. There is also a positive and significant correlation between the size of claims in motor and in home insurance, meaning that home and auto are indeed positively associated dependent risks.
+
+What does this mean? It means that even if we consider the characteristics of the client, and the vehicles and homes that are being covered, there is still some relationship between the claimed losses for vehicle insurance, the claimed losses for home insurance and the expected renewal behavior. If a customer claims motor insurance losses this implies a higher tendency to lapse. The reason we argue is that having a claim induces a decision to change to another company. A higher expected claims' size for homeowner insurance implies more tendency to lapse too. 
+
+The main takeaway from this market is that the existence of claims in motor-insurance is an alert for non-renewal, and to a lesser extend the same happens with homeowners insurance. When an insured has large claims, the odds of abandoning the company increase. In addition, we have found evidence of a positive correlation between the size of claims in motor and homeowners insurances. This latter fact has implications reserving practice because it shows that the two risks are not independent. 
+
+### Implications for insurance
+
+A simple calculation to find the value of an insurance customer is based on estimating the cost if the customer renews the two policies. Therefore, this is equivalent to calculating the expectation of the product of two random variables: claim size times lapse. If only the marginal model for claim size is used then it is implicitly assumed that the policy is already renewed and as such this would be a biased procedure before the individual decision is taken. In practice, companies just assume that the policy will be renewed and that the claim size is predicted with the marginal model. Instead, we consider the lapsing as part of the evaluation mechanism. Following the notation in [Section 1](#sec:Introduction), our estimate (without taking into account that there are general expenses such as managerial and advertising, plus solvency requirements that impact the costs of the insurance activities) is calculated as: 
+$$
+\mathrm{E}\left (Y_{j,it} \left (1-L_{j,it}\right )\right ) \text{for}\,\, j=1,2.
+$$
+
+This expression is equal to 
+$$
+\mathrm{E}\left (Y_{j,it}\right)-\rho_{jL}\mathrm{SD}_{Yj,it} \sqrt{\mathrm{E}\left ( L_{j,it}\right)\left (1- \mathrm{E}\left ( L_{j,it}\right)\right)} - \mathrm{E}\left (Y_{j,it}\right) \cdot \mathrm{E}\left (L_{j,it}\right),$$ 
+where $\mathrm{SD}_{Yj,it}$ is the standard deviation of the claim cost random variable for the jth line of business. As a result from this expression we can conclude that $\mathrm{E}\left (Y_{j,it} \left (1-L_{j,it}\right)\right)$ should be lower than the marginal expected cost $\mathrm{E}\left (Y_{j,it}\right)$ if $\rho_{jL}$ is positive. Moreover, in the Tweedie model $\mathrm{SD}_{Yj,it}$ can be expressed as a function of parameters $\phi$ and $p$ and the $\mathrm{E}\left(Y_{j,it}\right)$.
+
+The procedure gives the insurance company a direct way to compute a value of the customer that automatically introduces the expectations about the renewal behavior.
+
+
+--> 
+
+
+###### Run Time {-}
+
+Time taken for this program to compile:
+```{r comment="", echo=FALSE}
+time4<-Sys.time()
+time4-time1
+```
+<script language="javascript">
+function togglecode(id1,id2) {
+   var ele = document.getElementById(id1); var text = document.getElementById(id2);
+   if (ele.style.display == "block") {ele.style.display = "none"; text.innerHTML = "Show R Code";}
+      else {ele.style.display = "block"; text.innerHTML = "Hide R Code";}}
+</script>
+
+<script language="javascript">
+function toggleAppend(id1,id2) {
+   var ele = document.getElementById(id1); var text = document.getElementById(id2);
+   if (ele.style.display == "block") {ele.style.display = "none"; text.innerHTML = "Show Appendix";}
+      else {ele.style.display = "block"; text.innerHTML = "Hide Appendix";}}
+</script>
+
+
